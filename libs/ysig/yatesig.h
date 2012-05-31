@@ -8590,6 +8590,7 @@ private:
     SignallingTimer m_sgmRecvTimer;      // Receive segmented message
     SignallingTimer m_contTimer;         // Continuity timer
     SignallingTimer m_anmTimer;          // T9 ACM -> ANM timer
+    unsigned short m_sentMessages;       // The number of sent ITX messages
 };
 
 /**

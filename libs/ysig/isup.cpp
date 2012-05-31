@@ -1683,15 +1683,15 @@ static const MsgParams s_common_params[] = {
 	SS7MsgISUP::EndOfParameters
 	}
     },
-    { SS7MsgISUP::ITX, true,
+    { SS7MsgISUP::ITX, false,
 	{
-	    SS7MsgISUP::EndOfParameters,
 	    SS7MsgISUP::NationalChargeUnitNumber,
 	    SS7MsgISUP::NationalMessagesNumber,
+	    SS7MsgISUP::EndOfParameters,
 	    SS7MsgISUP::EndOfParameters
 	}
     },
-    { SS7MsgISUP::TXA, true,
+    { SS7MsgISUP::TXA, false,
 	{
 	    SS7MsgISUP::EndOfParameters,
 	    SS7MsgISUP::EndOfParameters
@@ -2024,6 +2024,8 @@ static const TokenDict s_names[] = {
     MAKE_NAME(CVR),
     MAKE_NAME(CVT),
     MAKE_NAME(EXM),
+    MAKE_NAME(ITX),
+    MAKE_NAME(TXA),
     { 0, 0 }
 };
 #undef MAKE_NAME
@@ -2496,6 +2498,14 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 	case SignallingEvent::Generic:
 	    if (event->message()) {
 		const String& oper = event->message()->params()[YSTRING("operation")];
+		if(oper == "charge") {
+		    SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::ITX,id());
+		    copyUpper(m->params(),event->message()->params());
+		    m->params().setParam("NationalMessagesNumber",String(++m_sentMessages));
+		    mylock.drop();
+		    result = transmitMessage(m);
+		    break;
+		}
 		if (oper != "transport")
 		    break;
 		if (!validMsgState(true,SS7MsgISUP::APM))
@@ -5140,6 +5150,11 @@ void SS7ISUP::processControllerMsg(SS7MsgISUP* msg, const SS7Label& label, int s
 	case SS7MsgISUP::LPA: // Loopback Acknowledge (national use)
 	    // Known but not implemented responses, just ignore them
 	    impl = false;
+	    break;
+	case SS7MsgISUP::ITX: // Charge Unit Indication
+	    transmitMessage(new SS7MsgISUP(SS7MsgISUP::TXA,msg->cic()),label,true);
+	    break;
+	case SS7MsgISUP::TXA: // Charging Acknowledgment
 	    break;
 	default:
 	    impl = false;
