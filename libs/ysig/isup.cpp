@@ -382,6 +382,7 @@ static bool decodeDigits(const SS7ISUP* isup, NamedList& list, const IsupParam* 
 	case SS7MsgISUP::CalledPartyNumber:
 	case SS7MsgISUP::RedirectionNumber:
 	case SS7MsgISUP::LocationNumber:
+	case SS7MsgISUP::CalledDirectoryNumber:
 	    tmp = ((buf[1] & 0x80) == 0);
 	    list.addParam(preName+".inn",tmp);
 	    break;
@@ -758,6 +759,7 @@ static unsigned char encodeDigits(const SS7ISUP* isup, SS7MSU& msu,
 	case SS7MsgISUP::CalledPartyNumber:
 	case SS7MsgISUP::RedirectionNumber:
 	case SS7MsgISUP::LocationNumber:
+	case SS7MsgISUP::CalledDirectoryNumber:
 	    if (val && extra && !extra->getBoolValue(preName+".inn",true))
 		b2 |= 0x80;
 	    break;
@@ -1348,7 +1350,7 @@ static const IsupParam s_paramDefs[] = {
     MAKE_PARAM(RedirectCounter,                0,0,             0,             0),                    // 3.97
     MAKE_PARAM(CCNRpossibleIndicator,          0,0,             0,             0),                    // 3.83
     MAKE_PARAM(PivotRoutingIndicators,         0,0,             0,             0),                    // 3.85
-    MAKE_PARAM(CalledDirectoryNumber,          0,0,             0,             0),                    // 3.86
+    MAKE_PARAM(CalledDirectoryNumber,          0,decodeDigits,  encodeDigits,  0),                    // 3.86
     MAKE_PARAM(OriginalCalledINNumber,         0,0,             0,             0),                    // 3.87
     MAKE_PARAM(CallingGeodeticLocation,        0,0,             0,             0),                    // 3.88
     MAKE_PARAM(HTR_Information,                0,0,             0,             0),                    // 3.89
@@ -1404,6 +1406,9 @@ static const IsupParam s_paramDefs[] = {
     MAKE_PARAM(CalledSubscribersTerminatingFacilMarks, 0,0,             0,             0),            // 3.2.9
     MAKE_PARAM(NationalInformationRequestIndicators,   0,0,             0,             0),            // 3.2.10
     MAKE_PARAM(NationalInformationIndicators,          0,0,             0,             0),            // 3.2.11
+    // National use (FR-ISUP), references to SPIROU1998-005
+    MAKE_PARAM(NationalMessagesNumber,          1,decodeInt,     encodeInt,      0), // 3.84
+    MAKE_PARAM(NationalChargeUnitNumber,        1,decodeInt,     encodeInt,      0), // 3.86
     { SS7MsgISUP::EndOfParameters, 0, 0, 0, 0, 0 }
 };
 #undef MAKE_PARAM
@@ -1676,6 +1681,20 @@ static const MsgParams s_common_params[] = {
 	SS7MsgISUP::EndOfParameters,
 	    SS7MsgISUP::UserToUserInformation,
 	SS7MsgISUP::EndOfParameters
+	}
+    },
+    { SS7MsgISUP::ITX, true,
+	{
+	    SS7MsgISUP::EndOfParameters,
+	    SS7MsgISUP::NationalChargeUnitNumber,
+	    SS7MsgISUP::NationalMessagesNumber,
+	    SS7MsgISUP::EndOfParameters
+	}
+    },
+    { SS7MsgISUP::TXA, true,
+	{
+	    SS7MsgISUP::EndOfParameters,
+	    SS7MsgISUP::EndOfParameters
 	}
     },
     { SS7MsgISUP::Unknown, false, { SS7MsgISUP::EndOfParameters } }

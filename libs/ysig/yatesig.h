@@ -8022,6 +8022,8 @@ public:
 	CVR  = 0xeb, // Circuit Validation Response (ANSI only)
 	CVT  = 0xec, // Circuit Validation Test (ANSI only)
 	EXM  = 0xed, // Exit Message (ANSI only)
+	ITX  = 0xe1, // Charge Unit (FR only)
+	TXA  = 0xe2, // Charging Acknowledgement (FR only)
 	// Dummy, used for various purposes
 	CtrlSave = 256  // control, save circuits
     };
@@ -8151,6 +8153,8 @@ public:
 	LastDivertingLineIdentity               = 0xfc, // UK-ISUP
 	PresentationNumber                      = 0xfd, // UK-ISUP
 	NationalForwardCallIndicators           = 0xfe, // UK-ISUP
+	NationalMessagesNumber                  = 0xe2, // FR-ISUP
+	NationalChargeUnitNumber                = 0xe3, // FR-ISUP
     };
 
     /**
