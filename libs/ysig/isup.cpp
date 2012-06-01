@@ -2501,7 +2501,7 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 		if(oper == "charge") {
 		    SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::ITX,id());
 		    copyUpper(m->params(),event->message()->params());
-		    m->params().setParam("NationalMessagesNumber",String(++m_sentMessages));
+		    m->params().setParam("NationalMessagesNumber",String(++m_sentItxMessages));
 		    mylock.drop();
 		    result = transmitMessage(m);
 		    break;
