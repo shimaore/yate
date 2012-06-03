@@ -2460,6 +2460,22 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 		m_state = Ringing;
 		mylock.drop();
 		result = transmitMessage(m);
+	    }  else {
+		if (validMsgState(true,SS7MsgISUP::ACM)) {
+		    SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::ACM,id());
+		    if (event->message()) {
+			copyUpper(m->params(),event->message()->params());
+			m_inbandAvailable = m_inbandAvailable ||
+			    event->message()->params().getBoolValue(YSTRING("earlymedia"));
+		    }
+		    if (m_inbandAvailable)
+			SignallingUtils::appendFlag(m->params(),"OptionalBackwardCallIndicators","inband");
+		    if (event->type() == SignallingEvent::Ringing)
+			SignallingUtils::appendFlag(m->params(),"BackwardCallIndicators","called-free");
+		    m_state = Accepted;
+		    mylock.drop();
+		    result = transmitMessage(m);
+		}
 	    }
 	    break;
 	case SignallingEvent::Accept:
@@ -2487,6 +2503,15 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 		m_state = Answered;
 		mylock.drop();
 		result = transmitMessage(m);
+	    } else {
+		if (validMsgState(true,SS7MsgISUP::CON)) {
+		    SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::CON,id());
+		    if (event->message())
+			copyUpper(m->params(),event->message()->params());
+		    m_state = Answered;
+		    mylock.drop();
+		    result = transmitMessage(m);
+		}
 	    }
 	    break;
 	case SignallingEvent::Release:
