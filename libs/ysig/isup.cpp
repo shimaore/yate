@@ -2151,7 +2151,8 @@ SS7ISUPCall::SS7ISUPCall(SS7ISUP* controller, SignallingCircuit* cic,
                                          // Releasing: Q.764: T1: 15..60 seconds
     m_sgmRecvTimer(ISUP_T34_DEFVAL),     // Q.764: T34 - 2..4 seconds
     m_contTimer(ISUP_T27_DEFVAL),        // Q.764: T27 - 4 minutes
-    m_anmTimer(0)                        // Q.764 T9 Q.118: 1.5 - 3 minutes, not always used
+    m_anmTimer(0),                       // Q.764 T9 Q.118: 1.5 - 3 minutes, not always used
+    m_sentItxMessages(0)
 {
     if (!(controller && m_circuit)) {
 	Debug(isup(),DebugWarn,
