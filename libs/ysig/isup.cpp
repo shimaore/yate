@@ -1393,7 +1393,7 @@ static const IsupParam s_paramDefs[] = {
     MAKE_PARAM(Precedence,                     0,0,             0,             0),                    //
     MAKE_PARAM(ServiceCodeIndicator,           0,0,             0,             0),                    //
     MAKE_PARAM(SpecialProcessingRequest,       0,0,             0,             0),                    //
-    MAKE_PARAM(TransactionRequest,             0,0,             0,             0),                    //
+    // MAKE_PARAM(TransactionRequest,             0,0,             0,             0),                    //
     // National use (UK-ISUP), references to NICC ND 1007 2001/07
     MAKE_PARAM(NationalForwardCallIndicators,          2,decodeFlags,   encodeFlags,   s_flags_nfci), // 3.2.1
     MAKE_PARAM(NationalForwardCallIndicatorsLinkByLink,0,0,             0,             0),            // 3.2.2
