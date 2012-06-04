@@ -2523,20 +2523,26 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 	case SignallingEvent::Generic:
 	    if (event->message()) {
 		const String& oper = event->message()->params()[YSTRING("operation")];
-		if(oper == "charge") {
-		    SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::ITX,id());
-		    copyUpper(m->params(),event->message()->params());
-		    m->params().setParam("NationalMessagesNumber",String(++m_sentItxMessages));
-		    mylock.drop();
-		    result = transmitMessage(m);
-		    break;
-		}
 		if (oper != "transport")
 		    break;
 		if (!validMsgState(true,SS7MsgISUP::APM))
 		    break;
 		SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::APM,id());
 		copyUpper(m->params(),event->message()->params());
+		mylock.drop();
+		result = transmitMessage(m);
+	    }
+	    break;
+	case SignallingEvent::Charge:
+	    if (event->message()) {
+		const String& oper = event->message()->params()[YSTRING("operation")];
+		if (oper != "charge")
+		    break;
+		// if (!validMsgState(true,SS7MsgISUP::ITX))
+		//    break;
+		SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::ITX,id());
+		copyUpper(m->params(),event->message()->params());
+		m->params().setParam("NationalMessagesNumber",String(++m_sentItxMessages));
 		mylock.drop();
 		result = transmitMessage(m);
 	    }
