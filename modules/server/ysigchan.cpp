@@ -1277,6 +1277,7 @@ void SigChannel::handleEvent(SignallingEvent* event)
 	case SignallingEvent::Ringing:   evRinging(event);  break;
 	case SignallingEvent::Circuit:   evCircuit(event);  break;
 	case SignallingEvent::Generic:   evGeneric(event,"transport"); break;
+	case SignallingEvent::Charge:    evGeneric(event,"charge");    break;
 	case SignallingEvent::Suspend:   evGeneric(event,"suspend");   break;
 	case SignallingEvent::Resume:    evGeneric(event,"resume");    break;
 	default:
@@ -1429,6 +1430,8 @@ bool SigChannel::msgUpdate(Message& msg)
     SignallingEvent::Type evt = SignallingEvent::Unknown;
     if (oper == YSTRING("transport"))
 	evt = SignallingEvent::Generic;
+    else if (oper == YSTRING("charge"))
+	evt = SignallingEvent::Charge;
     else if (oper == YSTRING("suspend"))
 	evt = SignallingEvent::Suspend;
     else if (oper == YSTRING("resume"))
