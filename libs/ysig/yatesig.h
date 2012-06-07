@@ -8801,6 +8801,14 @@ public:
      */
     bool processParamCompat(const NamedList& list, unsigned int cic, bool* callReleased = 0);
 
+    /**
+     * Return the point code type of this call controller.
+     * @return The point code type
+     */
+    inline SS7PointCode::Type pointCodeType() const {
+	return m_type;
+    }
+
 protected:
     /**
      * Remove all links with other layers. Disposes the memory

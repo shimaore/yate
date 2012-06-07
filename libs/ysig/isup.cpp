@@ -300,7 +300,9 @@ static void getDigits(String& num, unsigned char oddNum, const unsigned char* bu
     }
 }
 
-const char* getIsupParamName(unsigned char type);
+static const IsupParam* getParamDesc(SS7PointCode::Type type, SS7MsgISUP::Parameters ptype);
+static const IsupParam* getParamDesc(SS7PointCode::Type type, const String& name);
+static const char* getIsupParamName(SS7PointCode::Type type, unsigned char ptype);
 
 // Decoder for message or parameter compatibility
 // Q.763 3.33/3.41
@@ -327,7 +329,7 @@ static bool decodeCompat(const SS7ISUP* isup, NamedList& list, const IsupParam* 
 		    Debug(isup,DebugMild,"decodeCompat unexpected end of data (len=%u) for %s",len,param->name);
 		    return false;
 		}
-		const char* paramName = getIsupParamName(val);
+		const char* paramName = getIsupParamName(isup->pointCodeType(),val);
 		String name = prefix + param->name;
 		if (paramName)
 		    name << "." << paramName;
@@ -1281,7 +1283,8 @@ static const TokenDict s_dict_oli[] = {
 };
 
 #define MAKE_PARAM(p,s,a,d,t) { SS7MsgISUP::p,s,#p,a,d,t }
-static const IsupParam s_paramDefs[] = {
+// Descriptor of ISUP parameters common across standards
+static const IsupParam s_common_paramDefs[] = {
 //             name                          len decoder        encoder        table                  References
 
     // Standard parameters, references to ITU Q.763
@@ -1366,34 +1369,19 @@ static const IsupParam s_paramDefs[] = {
     MAKE_PARAM(NumberPortabilityInformation,   0,decodeNotif,   encodeNotif,   s_dict_portability),   // 3.101
     // No references
     MAKE_PARAM(ApplicationTransport,           0,decodeAPT,     encodeAPT,     0),                    // 3.82
-    MAKE_PARAM(BusinessGroup,                  0,0,             0,             0),                    //
     MAKE_PARAM(CallModificationIndicators,     0,0,             0,             0),                    //
-    MAKE_PARAM(CarrierIdentification,          0,0,             0,             0),                    //
-    MAKE_PARAM(CircuitIdentificationName,      0,0,             0,             0),                    //
-    MAKE_PARAM(CarrierSelectionInformation,    0,0,             0,             0),                    //
-    MAKE_PARAM(ChargeNumber,                   0,0,             0,             0),                    //
     MAKE_PARAM(CircuitAssignmentMap,           0,0,             0,             0),                    //
-    MAKE_PARAM(CircuitGroupCharactIndicator,   1,decodeFlags,   encodeFlags,   s_flags_ansi_cgci),    // T1.113 ??
-    MAKE_PARAM(CircuitValidationRespIndicator, 1,decodeFlags,   encodeFlags,   s_flags_ansi_cvri),    // T1.113 ??
-    MAKE_PARAM(CommonLanguage,                 0,0,             0,             0),                    //
     MAKE_PARAM(CUG_CheckResponseIndicators,    0,0,             0,             0),                    //
-    MAKE_PARAM(Egress,                         0,0,             0,             0),                    //
     MAKE_PARAM(FacilityInformationIndicators,  0,0,             0,             0),                    //
     MAKE_PARAM(FreephoneIndicators,            0,0,             0,             0),                    //
-    MAKE_PARAM(GenericName,                    0,decodeName,    encodeName,    0),                    //
     MAKE_PARAM(HopCounter,                     1,decodeInt,     encodeInt,     0),                    // 3.80
     MAKE_PARAM(Index,                          0,0,             0,             0),                    //
-    MAKE_PARAM(Jurisdiction,                   0,0,             0,             0),                    //
     MAKE_PARAM(MLPP_Precedence,                0,0,             0,             0),                    //
-    MAKE_PARAM(NetworkTransport,               0,0,             0,             0),                    //
-    MAKE_PARAM(NotificationIndicator,          0,0,             0,             0),                    //
-    MAKE_PARAM(OperatorServicesInformation,    0,0,             0,             0),                    //
-    MAKE_PARAM(OriginatingLineInformation,     1,decodeInt,     encodeInt,     s_dict_oli),           //
-    MAKE_PARAM(OutgoingTrunkGroupNumber,       0,0,             0,             0),                    //
     MAKE_PARAM(Precedence,                     0,0,             0,             0),                    //
-    MAKE_PARAM(ServiceCodeIndicator,           0,0,             0,             0),                    //
-    MAKE_PARAM(SpecialProcessingRequest,       0,0,             0,             0),                    //
-    // MAKE_PARAM(TransactionRequest,             0,0,             0,             0),                    //
+    { SS7MsgISUP::EndOfParameters, 0, 0, 0, 0, 0 }
+};
+
+static const IsupParam s_itu_paramDefs[] = {
     // National use (UK-ISUP), references to NICC ND 1007 2001/07
     MAKE_PARAM(NationalForwardCallIndicators,          2,decodeFlags,   encodeFlags,   s_flags_nfci), // 3.2.1
     MAKE_PARAM(NationalForwardCallIndicatorsLinkByLink,0,0,             0,             0),            // 3.2.2
@@ -1411,14 +1399,38 @@ static const IsupParam s_paramDefs[] = {
     MAKE_PARAM(NationalChargeUnitNumber,        1,decodeInt,     encodeInt,      0), // 3.86
     { SS7MsgISUP::EndOfParameters, 0, 0, 0, 0, 0 }
 };
+
+static const IsupParam s_ansi_paramDefs[] = {
+    MAKE_PARAM(OperatorServicesInformation,    0,0,             0,             0),                    //
+    MAKE_PARAM(Egress,                         0,0,             0,             0),                    //
+    MAKE_PARAM(Jurisdiction,                   0,0,             0,             0),                    //
+    MAKE_PARAM(CarrierIdentification,          0,0,             0,             0),                    //
+    MAKE_PARAM(BusinessGroup,                  0,0,             0,             0),                    //
+    MAKE_PARAM(GenericName,                    0,decodeName,    encodeName,    0),                    //
+    MAKE_PARAM(NotificationIndicator,          0,0,             0,             0),                    //
+    MAKE_PARAM(TransactionRequest,             0,0,             0,             0),                    //
+    MAKE_PARAM(CircuitGroupCharactIndicator,   1,decodeFlags,   encodeFlags,   s_flags_ansi_cgci),    // T1.113 ??
+    MAKE_PARAM(CircuitValidationRespIndicator, 1,decodeFlags,   encodeFlags,   s_flags_ansi_cvri),    // T1.113 ??
+    MAKE_PARAM(OutgoingTrunkGroupNumber,       0,0,             0,             0),                    //
+    MAKE_PARAM(CircuitIdentificationName,      0,0,             0,             0),                    //
+    MAKE_PARAM(CommonLanguage,                 0,0,             0,             0),                    //
+    MAKE_PARAM(OriginatingLineInformation,     1,decodeInt,     encodeInt,     s_dict_oli),           //
+    MAKE_PARAM(ChargeNumber,                   0,0,             0,             0),                    //
+    MAKE_PARAM(ServiceCodeIndicator,           0,0,             0,             0),                    //
+    MAKE_PARAM(SpecialProcessingRequest,       0,0,             0,             0),                    //
+    MAKE_PARAM(CarrierSelectionInformation,    0,0,             0,             0),                    //
+    MAKE_PARAM(NetworkTransport,               0,0,             0,             0),                    //
+    { SS7MsgISUP::EndOfParameters, 0, 0, 0, 0, 0 }
+};
 #undef MAKE_PARAM
 
-const char* getIsupParamName(unsigned char type)
+const char* getIsupParamName(SS7PointCode::Type type, unsigned char ptype)
 {
-   for (unsigned int i = 0; s_paramDefs[i].type; i++)
-	if (type == s_paramDefs[i].type)
-	    return s_paramDefs[i].name;
-   return 0;
+    const IsupParam* param = 0;
+    param = getParamDesc(type,(SS7MsgISUP::Parameters)ptype);
+    if(param)
+	return param->name;
+    return 0;
 }
 
 // Descriptor of ISUP message common across standards
@@ -1824,21 +1836,53 @@ static unsigned char encodeParam(const SS7ISUP* isup, SS7MSU& msu,
 }
 
 // Locate the description for a parameter by type
-static const IsupParam* getParamDesc(SS7MsgISUP::Parameters type)
+static const IsupParam* getParamDesc(SS7PointCode::Type type, SS7MsgISUP::Parameters ptype)
 {
-    const IsupParam* param = s_paramDefs;
+    const IsupParam* param = 0;
+    switch (type) {
+	case SS7PointCode::ITU:
+	    param = s_itu_paramDefs;
+	    break;
+	case SS7PointCode::ANSI:
+	case SS7PointCode::ANSI8:
+	    param = s_ansi_paramDefs;
+	    break;
+	default:
+	    return 0;
+    }
     for (; param->type != SS7MsgISUP::EndOfParameters; param++) {
-	if (param->type == type)
+	if (param->type == ptype)
+	    return param;
+    }
+    // then search in common table
+    for (param = s_common_paramDefs; param->type != SS7MsgISUP::EndOfParameters; param++) {
+	if (param->type == ptype)
 	    return param;
     }
     return 0;
 }
 
 // Locate the description for a parameter by name
-static const IsupParam* getParamDesc(const String& name)
+static const IsupParam* getParamDesc(SS7PointCode::Type type, const String& name)
 {
-    const IsupParam* param = s_paramDefs;
+    const IsupParam* param = 0;
+    switch (type) {
+	case SS7PointCode::ITU:
+	    param = s_itu_paramDefs;
+	    break;
+	case SS7PointCode::ANSI:
+	case SS7PointCode::ANSI8:
+	    param = s_ansi_paramDefs;
+	    break;
+	default:
+	    return 0;
+    }
     for (; param->type != SS7MsgISUP::EndOfParameters; param++) {
+	if (name == param->name)
+	    return param;
+    }
+    // then search in common table
+    for (param = s_common_paramDefs; param->type != SS7MsgISUP::EndOfParameters; param++) {
 	if (name == param->name)
 	    return param;
     }
@@ -1874,7 +1918,7 @@ static const MsgParams* getIsupParams(SS7PointCode::Type type, SS7MsgISUP::Type 
 }
 
 // Hexify a list of isup parameter values/names
-static void hexifyIsupParams(String& s, const String& list)
+static void hexifyIsupParams(SS7PointCode::Type type, String& s, const String& list)
 {
     if (!list)
 	return;
@@ -1887,7 +1931,7 @@ static void hexifyIsupParams(String& s, const String& list)
 	    String* str = static_cast<String*>(o->get());
 	    int val = str->toInteger(-1);
 	    if (val < 0) {
-		const IsupParam* p = getParamDesc(*str);
+		const IsupParam* p = getParamDesc(type,*str);
 		if (p)
 		    val = p->type;
 	    }
@@ -4071,7 +4115,7 @@ SS7MSU* SS7ISUP::buildMSU(SS7MsgISUP::Type type, unsigned char sio,
     SS7MsgISUP::Parameters ptype;
     // first add the length of mandatory fixed parameters
     while ((ptype = *plist++) != SS7MsgISUP::EndOfParameters) {
-	const IsupParam* param = getParamDesc(ptype);
+	const IsupParam* param = getParamDesc(m_type,ptype);
 	if (!param) {
 	    // this is fatal as we don't know the length
 	    Debug(this,DebugGoOn,"Missing description of fixed ISUP parameter 0x%02x [%p]",ptype,this);
@@ -4087,7 +4131,7 @@ SS7MSU* SS7ISUP::buildMSU(SS7MsgISUP::Type type, unsigned char sio,
     unsigned int ptr = label.length() + 1 + len;
     // then add one pointer octet to each mandatory variable parameter
     while ((ptype = *plist++) != SS7MsgISUP::EndOfParameters) {
-	const IsupParam* param = getParamDesc(ptype);
+	const IsupParam* param = getParamDesc(m_type,ptype);
 	if (!param) {
 	    // this is fatal as we won't be able to populate later
 	    Debug(this,DebugGoOn,"Missing description of variable ISUP parameter 0x%02x [%p]",ptype,this);
@@ -4121,7 +4165,7 @@ SS7MSU* SS7ISUP::buildMSU(SS7MsgISUP::Type type, unsigned char sio,
     String prefix = params->getValue(YSTRING("message-prefix"));
     // first populate with mandatory fixed parameters
     while ((ptype = *plist++) != SS7MsgISUP::EndOfParameters) {
-	const IsupParam* param = getParamDesc(ptype);
+	const IsupParam* param = getParamDesc(m_type,ptype);
 	if (!param) {
 	    Debug(this,DebugFail,"Stage 2: no description of fixed ISUP parameter 0x%02x [%p]",ptype,this);
 	    continue;
@@ -4136,7 +4180,7 @@ SS7MSU* SS7ISUP::buildMSU(SS7MsgISUP::Type type, unsigned char sio,
     }
     // now populate with mandatory variable parameters
     for (; (ptype = *plist++) != SS7MsgISUP::EndOfParameters; ptr++) {
-	const IsupParam* param = getParamDesc(ptype);
+	const IsupParam* param = getParamDesc(m_type,ptype);
 	if (!param) {
 	    Debug(this,DebugFail,"Stage 2: no description of variable ISUP parameter 0x%02x [%p]",ptype,this);
 	    continue;
@@ -4174,7 +4218,7 @@ SS7MSU* SS7ISUP::buildMSU(SS7MsgISUP::Type type, unsigned char sio,
 		continue;
 	    String tmp(ns->name());
 	    tmp >> prefix.c_str();
-	    const IsupParam* param = getParamDesc(tmp);
+	    const IsupParam* param = getParamDesc(m_type,tmp);
 	    unsigned char size = 0;
 	    if (param)
 		size = encodeParam(this,*msu,param,ns,params,prefix);
@@ -4270,7 +4314,7 @@ bool SS7ISUP::decodeMessage(NamedList& msg,
     SS7MsgISUP::Parameters ptype;
     // first decode any mandatory fixed parameters the message should have
     while ((ptype = *plist++) != SS7MsgISUP::EndOfParameters) {
-	const IsupParam* param = getParamDesc(ptype);
+	const IsupParam* param = getParamDesc(m_type,ptype);
 	if (!param) {
 	    // this is fatal as we don't know the length
 	    Debug(this,DebugGoOn,"Missing description of fixed ISUP parameter 0x%02x [%p]",ptype,this);
@@ -4296,7 +4340,7 @@ bool SS7ISUP::decodeMessage(NamedList& msg,
     // next decode any mandatory variable parameters the message should have
     while ((ptype = *plist++) != SS7MsgISUP::EndOfParameters) {
 	mustWarn = false;
-	const IsupParam* param = getParamDesc(ptype);
+	const IsupParam* param = getParamDesc(m_type,ptype);
 	if (!param) {
 	    // we could skip over unknown mandatory variable length but it's still bad
 	    Debug(this,DebugGoOn,"Missing description of variable ISUP parameter 0x%02x [%p]",ptype,this);
@@ -4359,7 +4403,7 @@ bool SS7ISUP::decodeMessage(NamedList& msg,
 			size,paramLen,ptype,this);
 		    return false;
 		}
-		const IsupParam* param = getParamDesc(ptype);
+		const IsupParam* param = getParamDesc(m_type,ptype);
 		if (!param) {
 		    Debug(this,DebugMild,"Unknown optional ISUP parameter 0x%02x (size=%u) [%p]",ptype,size,this);
 		    decodeRawParam(this,msg,ptype,paramPtr,size,prefix);
@@ -4446,7 +4490,7 @@ bool SS7ISUP::processParamCompat(const NamedList& list, unsigned int cic, bool* 
 	    "Terminating call (%p) on cic=%u: unknown/unhandled params='%s' [%p]",
 	    call,cic,relCall.c_str(),this);
 	String diagnostic;
-	hexifyIsupParams(diagnostic,relCall);
+	hexifyIsupParams(m_type,diagnostic,relCall);
 	if (call)
 	    call->setTerminate(true,"unknown-ie",diagnostic,m_location);
 	else if (m_remotePoint) {
@@ -4467,7 +4511,7 @@ bool SS7ISUP::processParamCompat(const NamedList& list, unsigned int cic, bool* 
     DDebug(this,DebugAll,"processParamCompat() cic=%u sending CNF for '%s' [%p]",
 	cic,cnf.c_str(),this);
     String diagnostic;
-    hexifyIsupParams(diagnostic,cnf);
+    hexifyIsupParams(m_type,diagnostic,cnf);
     if (diagnostic && m_remotePoint) {
 	SS7Label label(m_type,*m_remotePoint,*m_defPoint,
 	    (m_defaultSls == SlsCircuit) ? cic : m_sls);
