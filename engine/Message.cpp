@@ -211,12 +211,16 @@ int Message::commonDecode(const char* str, int offs)
 }
 
 
-MessageHandler::MessageHandler(const char* name, unsigned priority)
+MessageHandler::MessageHandler(const char* name, unsigned priority,
+	const char* trackName, bool addPriority)
     : String(name),
-      m_priority(priority), m_unsafe(0), m_dispatcher(0), m_filter(0)
+      m_trackName(trackName), m_priority(priority),
+      m_unsafe(0), m_dispatcher(0), m_filter(0)
 {
-    DDebug(DebugAll,"MessageHandler::MessageHandler(\"%s\",%u) [%p]",
-	name,priority,this);
+    DDebug(DebugAll,"MessageHandler::MessageHandler('%s',%u,'%s',%s) [%p]",
+	name,priority,trackName,String::boolText(addPriority),this);
+    if (addPriority && m_trackName)
+	m_trackName << ":" << priority;
 }
 
 MessageHandler::~MessageHandler()
@@ -280,11 +284,11 @@ bool MessageRelay::receivedInternal(Message& msg)
 }
 
 
-MessageDispatcher::MessageDispatcher()
+MessageDispatcher::MessageDispatcher(const char* trackParam)
     : Mutex(false,"MessageDispatcher"),
-      m_changes(0), m_warnTime(0)
+      m_trackParam(trackParam), m_changes(0), m_warnTime(0)
 {
-    XDebug(DebugInfo,"MessageDispatcher::MessageDispatcher() [%p]",this);
+    XDebug(DebugInfo,"MessageDispatcher::MessageDispatcher('%s') [%p]",trackParam,this);
 }
 
 MessageDispatcher::~MessageDispatcher()
@@ -368,7 +372,7 @@ bool MessageDispatcher::dispatch(Message& msg)
 #endif
     bool retv = false;
     ObjList *l = &m_handlers;
-    lock();
+    Lock mylock(this);
     for (; l; l=l->next()) {
 	MessageHandler *h = static_cast<MessageHandler*>(l->get());
 	if (h && (h->null() || *h == msg)) {
@@ -376,9 +380,16 @@ bool MessageDispatcher::dispatch(Message& msg)
 		continue;
 	    unsigned int c = m_changes;
 	    unsigned int p = h->priority();
+	    if (trackParam() && h->trackName()) {
+		NamedString* tracked = msg.getParam(trackParam());
+		if (tracked)
+		    tracked->append(h->trackName(),",");
+		else
+		    msg.addParam(trackParam(),h->trackName());
+	    }
 	    // mark handler as unsafe to destroy / uninstall
 	    h->m_unsafe++;
-	    unlock();
+	    mylock.drop();
 #ifdef DEBUG
 	    u_int64_t tm = Time::now();
 #endif
@@ -391,7 +402,7 @@ bool MessageDispatcher::dispatch(Message& msg)
 #endif
 	    if (retv && !msg.broadcast())
 		break;
-	    lock();
+	    mylock.acquire(this);
 	    if (c == m_changes)
 		continue;
 	    // the handler list has changed - find again
@@ -416,10 +427,11 @@ bool MessageDispatcher::dispatch(Message& msg)
 		}
 		l2 = l;
 	    }
+	    if (!l)
+		break;
 	}
     }
-    if (!l)
-	unlock();
+    mylock.drop();
     msg.dispatched(retv);
 #ifndef NDEBUG
     t = Time::now() - t;

@@ -579,6 +579,7 @@ void Channel::complete(Message& msg, bool minimal) const
     if (m_lastPeerId)
 	msg.setParam("lastpeerid",m_lastPeerId);
     msg.setParam("answered",String::boolText(m_answered));
+    msg.setParam("direction",direction());
 }
 
 Message* Channel::message(const char* name, bool minimal, bool data)
@@ -983,7 +984,7 @@ bool Module::installRelay(int id, const char* name, unsigned priority)
 	return true;
     m_relays |= id;
 
-    MessageRelay* relay = new MessageRelay(name,this,id,priority);
+    MessageRelay* relay = new MessageRelay(name,this,id,priority,Module::name());
     m_relayList.append(relay)->setDelete(false);
     Engine::install(relay);
     return true;

@@ -103,7 +103,9 @@ public:
 class EngineCommand : public MessageHandler
 {
 public:
-    EngineCommand() : MessageHandler("engine.command") { }
+    EngineCommand()
+	: MessageHandler("engine.command",100,"engine")
+	{ }
     virtual bool received(Message &msg);
     static void doCompletion(Message &msg, const String& partLine, const String& partWord);
 };
@@ -230,7 +232,7 @@ static Engine::PluginMode s_loadMode = Engine::LoadFail;
 static int s_maxworkers = 10;
 static bool s_debug = true;
 static bool s_capture = CAPTURE_EVENTS;
-static int s_maxevents = 10;
+static int s_maxevents = 25;
 static Mutex s_eventsMutex(false,"EventsList");
 static ObjList s_events;
 static String s_startMsg;
@@ -290,7 +292,10 @@ private:
 class EngineSuperHandler : public MessageHandler
 {
 public:
-    EngineSuperHandler() : MessageHandler("engine.timer",0), m_seq(0) { }
+    EngineSuperHandler()
+	: MessageHandler("engine.timer",1,"engine"),
+	  m_seq(0)
+	{ }
     virtual bool received(Message &msg)
 	{ ::write(s_super_handle,&m_seq,1); m_seq++; return false; }
     char m_seq;
@@ -299,14 +304,18 @@ public:
 class EngineStatusHandler : public MessageHandler
 {
 public:
-    EngineStatusHandler() : MessageHandler("engine.status",0) { }
+    EngineStatusHandler()
+	: MessageHandler("engine.status",90,"engine")
+	{ }
     virtual bool received(Message &msg);
 };
 
 class EngineHelp : public MessageHandler
 {
 public:
-    EngineHelp() : MessageHandler("engine.help") { }
+    EngineHelp()
+	: MessageHandler("engine.help",100,"engine")
+	{ }
     virtual bool received(Message &msg);
 };
 
@@ -326,7 +335,9 @@ private:
 class EngineEventHandler : public MessageHandler
 {
 public:
-    EngineEventHandler() : MessageHandler("module.update",0) { }
+    EngineEventHandler()
+	: MessageHandler("module.update",1,"engine")
+	{ }
     virtual bool received(Message &msg);
 };
 
@@ -381,6 +392,13 @@ static void initUsrPath(String& path, const char* newPath = 0)
 	path = path.substr(0,path.length()-1);
 }
 
+// helper function to set up the config file name
+static void initCfgFile(const char* name)
+{
+    s_cfgfile = name;
+    if (s_cfgfile.endsWith(".exe") || s_cfgfile.endsWith(".EXE"))
+	s_cfgfile = s_cfgfile.substr(0,s_cfgfile.length()-4);
+}
 
 bool EngineStatusHandler::received(Message &msg)
 {
@@ -717,6 +735,8 @@ bool EngineHelp::received(Message &msg)
 	msg.retValue() << s_evtsOpt << s_evtsMsg;
     else if (line == YSTRING("logview"))
 	msg.retValue() << s_logvOpt << s_logvMsg;
+    else
+	return false;
     return true;
 }
 
@@ -1189,6 +1209,13 @@ int Engine::engineInit()
     CapturedEvent::capturing(s_capture);
     if (s_capture && s_startMsg)
 	CapturedEvent::append(-1,s_startMsg);
+    String track = s_cfg.getValue("general","trackparam");
+    if (track.null() || track.toBoolean(false))
+	track = "handlers";
+    else if (!track.toBoolean(true))
+	track.clear();
+    if (track)
+	m_dispatcher.trackParam(track);
 #ifdef _WINDOWS
     int winTimerRes = s_cfg.getIntValue("general","wintimer");
     if ((winTimerRes > 0) && (winTimerRes < 100)) {
@@ -1254,6 +1281,8 @@ int Engine::engineInit()
 #endif
     s_params.addParam("maxworkers",String(s_maxworkers));
     s_params.addParam("maxevents",String(s_maxevents));
+    if (track)
+	s_params.addParam("trackparam",track);
 #ifdef _WINDOWS
     {
 	char buf[PATH_MAX];
@@ -1891,6 +1920,7 @@ int Engine::main(int argc, const char** argv, const char** env, RunMode mode, En
 
     if (!cfgfile)
 	cfgfile = argv[0][0] ? argv[0] : "yate";
+    initCfgFile(cfgfile);
 
     int i;
     bool inopt = true;
@@ -1901,6 +1931,14 @@ int Engine::main(int argc, const char** argv, const char** env, RunMode mode, En
 	    if (!::strncmp(pc,"-psn_",5))
 		continue;
 	    while (pc && *++pc) {
+		const char* param = 0;
+
+#define GET_PARAM \
+    if ('=' == pc[1]) param = pc + 2; \
+    else if (i+1 < argc) param = argv[++i]; \
+    else { noarg(client,argv[i]); return ENOENT; } \
+    pc = 0
+
 		switch (*pc) {
 		    case '-':
 			if (!*++pc) {
@@ -1965,84 +2003,44 @@ int Engine::main(int argc, const char** argv, const char** env, RunMode mode, En
 			s_logtruncate = true;
 			break;
 		    case 'p':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			pidfile=argv[++i];
+			GET_PARAM;
+			pidfile = param;
 			break;
 		    case 'l':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			s_logfile=argv[++i];
+			GET_PARAM;
+			s_logfile = param;
 			break;
 		    case 'n':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			cfgfile=argv[++i];
+			GET_PARAM;
+			cfgfile = param;
 			break;
 		    case 'e':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			s_shrpath=argv[++i];
+			GET_PARAM;
+			s_shrpath = param;
 			break;
 		    case 'c':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			s_cfgpath=argv[++i];
+			GET_PARAM;
+			s_cfgpath = param;
 			break;
 		    case 'u':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			usrpath=argv[++i];
+			GET_PARAM;
+			usrpath = param;
 			break;
 		    case 'm':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			s_modpath=argv[++i];
+			GET_PARAM;
+			s_modpath = param;
 			break;
 		    case 'w':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			workdir = argv[++i];
+			GET_PARAM;
+			workdir = param;
 			break;
 		    case 'x':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			extraPath(argv[++i]);
+			GET_PARAM;
+			extraPath(param);
 			break;
 		    case 'N':
-			if (i+1 >= argc) {
-			    noarg(client,argv[i]);
-			    return ENOENT;
-			}
-			pc = 0;
-			s_node=argv[++i];
+			GET_PARAM;
+			s_node = param;
 			break;
 #ifdef RLIMIT_CORE
 		    case 'C':
@@ -2130,6 +2128,9 @@ int Engine::main(int argc, const char** argv, const char** env, RunMode mode, En
 			badopt(client,*pc,argv[i]);
 			return EINVAL;
 		}
+
+#undef GET_PARAM
+
 	    }
 	}
 	else {
@@ -2144,10 +2145,7 @@ int Engine::main(int argc, const char** argv, const char** env, RunMode mode, En
 
     s_mode = mode;
 
-    s_cfgfile = cfgfile;
-    if (s_cfgfile.endsWith(".exe") || s_cfgfile.endsWith(".EXE"))
-	s_cfgfile = s_cfgfile.substr(0,s_cfgfile.length()-4);
-
+    initCfgFile(cfgfile);
     initUsrPath(s_usrpath,usrpath);
 
     if (workdir && ::chdir(workdir)) {

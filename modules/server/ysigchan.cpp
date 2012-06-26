@@ -839,14 +839,6 @@ protected:
     int m_ssn;
 };
 
-class SCCPHandler : public MessageHandler
-{
-public:
-    inline SCCPHandler()
-	: MessageHandler("sccp.generate",100) {}
-    virtual bool received(Message& msg);
-};
-
 
 static SigDriver plugin;
 static SigFactory factory;
@@ -936,6 +928,17 @@ const TokenDict SigFactory::s_compClass[] = {
 #undef MAKE_CLASS
     { 0, 0 }
 };
+
+
+class SCCPHandler : public MessageHandler
+{
+public:
+    inline SCCPHandler()
+	: MessageHandler("sccp.generate",100,plugin.name())
+	{ }
+    virtual bool received(Message& msg);
+};
+
 
 // Construct a locally configured component
 SignallingComponent* SigFactory::create(const String& type, const NamedList& name)
@@ -4736,7 +4739,7 @@ void SigTrunkThread::run()
  */
 // Init the ISUP component
 IsupDecodeHandler::IsupDecodeHandler(bool decode)
-    : MessageHandler(decode ? "isup.decode" : "isup.encode",100)
+    : MessageHandler(decode ? "isup.decode" : "isup.encode",100,plugin.name())
 {
     NamedList params("");
     String dname = plugin.prefix() + *this;
@@ -4896,7 +4899,8 @@ bool SCCPHandler::received(Message& msg)
  */
 
 SCCPUserDummy::SCCPUserDummy(const NamedList& params)
-    :SignallingComponent(params,&params), SCCPUser(params), m_ssn(0)
+    : SignallingComponent(params,&params,"ss7-tcap-user"),
+      SCCPUser(params), m_ssn(0)
 {
     Debug(&plugin,DebugAll,"Creating SCCPUserDummy [%p]",this);
     m_ssn = params.getIntValue("ssn",0);

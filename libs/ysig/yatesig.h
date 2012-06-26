@@ -712,8 +712,9 @@ protected:
      * Constructor with a default empty component name
      * @param name Name of this component
      * @param params Optional pointer to creation parameters
+     * @param type Default component type string
      */
-    SignallingComponent(const char* name = 0, const NamedList* params = 0);
+    SignallingComponent(const char* name = 0, const NamedList* params = 0, const char* type = "unknown");
 
     /**
      * This method is called to clean up and destroy the object after the
@@ -7180,6 +7181,8 @@ private:
     unsigned int m_state;
     unsigned int m_remoteStatus;
     unsigned int m_transportState;
+    unsigned int m_connFailCounter;
+    unsigned int m_connFailThreshold;
     Mutex m_mutex;
     ObjList m_ackList;
     SignallingTimer m_t1;
@@ -7190,6 +7193,7 @@ private:
     SignallingTimer m_confTimer;
     SignallingTimer m_oosTimer;
     SignallingTimer m_waitOosTimer;
+    SignallingTimer m_connFailTimer;
     bool m_autostart;
     bool m_sequenced;
     bool m_dumpMsg;
@@ -8323,7 +8327,7 @@ public:
      * Constructor
      */
     inline SS7Testing(const NamedList& params, unsigned char sio = SS7MSU::MTP_T|SS7MSU::National)
-	: SignallingComponent(params.safe("SS7Testing"),&params),
+	: SignallingComponent(params.safe("SS7Testing"),&params,"ss7-test"),
 	  SS7Layer4(sio,&params),
 	  Mutex(true,"SS7Testing"),
 	  m_timer(0), m_exp(0), m_seq(0), m_len(16), m_sharing(false)
@@ -11053,7 +11057,7 @@ private:
  * Implementation of SS7 Transactional Capabilities Application Part Transaction 
  * @short SS7 TCAP transaction implementation
  */
-class YSIG_API SS7TCAPTransaction : public GenObject, public Mutex
+class YSIG_API SS7TCAPTransaction : public RefObject, public Mutex
 {
 public:
     enum TransactionState {
