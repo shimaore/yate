@@ -835,9 +835,10 @@ public:
      *  the more specific protected version.
      * You may override this method if you need processing of invalid states.
      * @param pendingOnly True to only return outgoing and pending events
+     * @param time Time to use in timeouts, zero to use system time
      * @return A newly allocated event or NULL if none is needed
      */
-    virtual SIPEvent* getEvent(bool pendingOnly = false);
+    virtual SIPEvent* getEvent(bool pendingOnly = false, u_int64_t time = 0);
 
     /**
      * Checks if a response message can be sent
@@ -1253,6 +1254,13 @@ public:
 	{ return m_flags; }
 
     /**
+     * Check if message party should be changed from latest dialog party
+     * @return Value of auto change party option
+     */
+    inline bool autoChangeParty() const
+	{ return m_autoChangeParty; }
+
+    /**
      * Get an authentication nonce
      * @param nonce String reference to fill with the current nonce
      */
@@ -1358,6 +1366,7 @@ protected:
     String m_nonce_secret;
     u_int32_t m_nonce_time;
     Mutex m_nonce_mutex;
+    bool m_autoChangeParty;
 };
 
 }

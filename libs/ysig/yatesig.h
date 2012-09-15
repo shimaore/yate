@@ -4337,6 +4337,15 @@ public:
     virtual void reconnect(bool force = false)
 	{ }
 
+    /**
+     * Get sctp socket parameters.
+     * @param params List of parameters to obtain
+     * @param result List of parameters to fill
+     * @return True if operation was successful, false if an error occurred
+     */
+    virtual bool getSocketParams(const String& params, NamedList& result)
+	{ return false; }
+
 protected:
     /**
      * Constructor
@@ -4573,6 +4582,13 @@ public:
      */
     bool restart(bool force);
 
+    /**
+     * Get sctp socket parameters.
+     * @param params List of parameters to obtain
+     * @param result List of parameters to fill
+     * @return True if operation was successful, false if an error occurred
+     */
+    bool getSocketParams(const String& params, NamedList& result);
 protected:
     /**
      * Process a complete message
@@ -5295,7 +5311,22 @@ public:
     virtual bool sendData(DataBlock& data, NamedList& params);
 
     /**
-     * Send a request/ notification to sccp regarding a subsystem status
+     * Send a request / notification from users to sccp regarding a subsystem status
+     * <pre>
+      Type : CoordinateRequest -> Request from a user to sccp to go OOS
+           params: "ssn" The ssn to go OOS
+     	           "smi" Subsystem multiplicity indicator
+     		   "backups" The number of backup subsystems
+     		   "backup.N.ssn" The ssn of the backup subsystem number N
+     		   "backup.N.pointcode" The ssn of the backup subsystem number N
+      Type : CoordinateResponse -> Indication from a user to sccp in response to CoordinateIndication<
+           params: "ssn" The subsystem number that approved the indication
+                   "smi" 0
+      Type : StatusRequest -> Request from user to sccp to update a subsystem status
+       	   params: "ssn" The affected subsystem number
+       		   "smi" 0;
+      		   "subsystem-status": The requested status: UserOutOfService, UserInService
+      </pre>
      * @param type The type of request / notification
      * @param params List of parameters
      * @return True if sccp management has processed the request / notification.
@@ -5320,7 +5351,19 @@ public:
      virtual HandledMSU notifyData(DataBlock& data, NamedList& params);
 
      /**
-      * Notification from SCCP management about pointcodes status, OOS responses/indications, subsystems status
+      * Notification from SCCP management to a sccp user about pointcodes status, OOS responses/indications, subsystems status
+      * <pre>
+      Type: CoordinateIndication -> Indication from a remote SCCP User that requires to go OOS
+          params: "ssn" -> The subsystem number of the remote SCCP User
+      	          "smi" -> Subsystem multiplicity indicator
+      	          "pointcode" -> The pointcode of the remote SCCP User
+      Type: SubsystemStatus -> Request from SCCP Management to SCCP Users to query the specified subsystem status.
+                               This happens when a SubsystemStatusTest(SST) message is received
+      	  params: "ssn" -> The requested subsystem
+          returned params:
+      	          "subsystem-status" -> The status of the subsystem: UserOutOfService, UserInService
+      	        		        Missing = UserOutOfService
+      </pre>
       * @param type The type of notification
       * @param params List of parameters
       * @return False on error
@@ -5330,7 +5373,7 @@ public:
     /**
      * Attach as user to a SCCP
      * @param sccp Pointer to the SCCP to use
-     * NOTE: This method will deref the pointer is is the same with the one that we already have!!
+     * NOTE: This method will deref the pointer if is the same with the one that we already have!!
      * When this method is called the sccp pointer reference counter must be incremented for this
      * SCCPUser.
      */
@@ -8111,6 +8154,9 @@ public:
 	ForwardGVNS                    = 0x4c,
 	BackwardGVNS                   = 0x4d,
 	RedirectCapability             = 0x4e, // National use
+	CalledINNumber                 = 0x6f,
+	UID_ActionIndicators           = 0x74,
+	UID_CapabilityIndicators       = 0x75,
 	RedirectCounter                = 0x77, // National use
 	ApplicationTransport           = 0x78,
 	CCNRpossibleIndicator          = 0x7a,
@@ -8622,6 +8668,13 @@ public:
 	SlsDefault = -4
     };
 
+    enum ChargeProcess {
+	Confusion,
+	Ignore,
+	Raw,
+	Parsed
+    };
+
     /**
      * Constructor
      * @param params Call controller's parameters
@@ -8817,6 +8870,13 @@ public:
 	return m_type;
     }
 
+    /*
+     * Obtain the way that charge message should be processed
+     * @return The way that charge message should be processed
+     */
+    inline ChargeProcess getChargeProcessType() const
+	{ return m_chargeProcessType; }
+
 protected:
     /**
      * Remove all links with other layers. Disposes the memory
@@ -8937,6 +8997,9 @@ private:
 	    Lock mylock(this);
 	    call = findCall(cic);
 	}
+    // Encode a raw message
+    SS7MSU* encodeRawMessage(SS7MsgISUP::Type type, unsigned char sio,
+	const SS7Label& label, unsigned int cic, const String& param) const;
     // Send blocking/unblocking messages.
     // Restart the re-check timer if there is any (un)lockable, not sent cic
     // Return false if no request was sent
@@ -8990,6 +9053,7 @@ private:
     bool m_duplicateCGB;                 // Send duplicate CGB messages (ANSI)
     bool m_ignoreUnkDigits;              // Check if the message parser should ignore unknown digits encoding
     bool m_l3LinkUp;                     // Flag indicating the availability of a Layer3 data link
+    ChargeProcess m_chargeProcessType;   // Indicates the way that charge message should be processed
     u_int64_t m_t1Interval;              // Q.764 T1 timer interval
     u_int64_t m_t5Interval;              // Q.764 T5 timer interval
     u_int64_t m_t7Interval;              // Q.764 T7 timer interval

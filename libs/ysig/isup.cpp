@@ -230,6 +230,31 @@ static const TokenDict s_dict_control[] = {
     { 0, 0 }
 };
 
+static const TokenDict s_dict_CRG_process[] = {
+    { "confusion", SS7ISUP::Confusion },
+    { "ignore",    SS7ISUP::Ignore },
+    { "raw",       SS7ISUP::Raw },
+    { "parsed",    SS7ISUP::Parsed },
+    { 0, 0 }
+};
+
+// Build next available parameter name
+static void buildName(const NamedList& list, const IsupParam* param, const String& prefix, String& name)
+{
+    name = prefix + param->name;
+    if (!list.getParam(name))
+	return;
+    // conflict - find a free index
+    for (unsigned int i = 1; ; i++) {
+	String tmp(name);
+	tmp << "." << i;
+	if (!list.getParam(tmp)) {
+	    name = tmp;
+	    break;
+	}
+    }
+}
+
 // Default decoder, dumps raw octets
 static bool decodeRaw(const SS7ISUP* isup, NamedList& list, const IsupParam* param,
     const unsigned char* buf, unsigned int len, const String& prefix)
@@ -239,7 +264,9 @@ static bool decodeRaw(const SS7ISUP* isup, NamedList& list, const IsupParam* par
     String raw;
     raw.hexify((void*)buf,len,' ');
     DDebug(isup,DebugInfo,"decodeRaw decoded %s=%s",param->name,raw.c_str());
-    list.addParam(prefix+param->name,raw);
+    String preName;
+    buildName(list,param,prefix,preName);
+    list.addParam(preName,raw);
     return true;
 }
 
@@ -267,7 +294,9 @@ static bool decodeInt(const SS7ISUP* isup, NamedList& list, const IsupParam* par
     while (len--)
 	val = (val << 8) | (unsigned int)(*buf++);
     DDebug(isup,DebugAll,"decodeInt decoded %s=%s (%u)",param->name,lookup(val,(const TokenDict*)param->data),val);
-    SignallingUtils::addKeyword(list,prefix+param->name,(const TokenDict*)param->data,val);
+    String preName;
+    buildName(list,param,prefix,preName);
+    SignallingUtils::addKeyword(list,preName,(const TokenDict*)param->data,val);
     return true;
 }
 
@@ -278,7 +307,9 @@ static bool decodeFlags(const SS7ISUP* isup, NamedList& list, const IsupParam* p
     const SignallingFlags* flags = (const SignallingFlags*)param->data;
     if (!flags)
 	return false;
-    return SignallingUtils::decodeFlags(isup,list,prefix+param->name,flags,buf,len);
+    String preName;
+    buildName(list,param,prefix,preName);
+    return SignallingUtils::decodeFlags(isup,list,preName,flags,buf,len);
 }
 
 // Utility function - extract just ISUP digits from a parameter
@@ -308,9 +339,11 @@ static bool decodeCompat(const SS7ISUP* isup, NamedList& list, const IsupParam* 
 {
     if (!len)
 	return false;
+    String preName;
+    buildName(list,param,prefix,preName);
     switch (param->type) {
 	case SS7MsgISUP::MessageCompatInformation:
-	    SignallingUtils::decodeFlags(isup,list,prefix+param->name,s_flags_msgcompat,buf,1);
+	    SignallingUtils::decodeFlags(isup,list,preName,s_flags_msgcompat,buf,1);
 	    if (buf[0] & 0x80) {
 		if (len == 1)
 		    return true;
@@ -318,7 +351,7 @@ static bool decodeCompat(const SS7ISUP* isup, NamedList& list, const IsupParam* 
 		    "decodeCompat invalid len=%u for %s with first byte having ext bit set",len,param->name);
 		break;
 	    }
-	    return 0 != SignallingUtils::dumpDataExt(isup,list,prefix+param->name+".more",buf+1,len-1);
+	    return 0 != SignallingUtils::dumpDataExt(isup,list,preName+".more",buf+1,len-1);
 	case SS7MsgISUP::ParameterCompatInformation:
 	    for (unsigned int i = 0; i < len;) {
 		unsigned char val = buf[i++];
@@ -371,7 +404,8 @@ static bool decodeDigits(const SS7ISUP* isup, NamedList& list, const IsupParam* 
     getDigits(tmp,buf[0],buf+2,len-2,isup && isup->ignoreUnknownAddrSignals());
     DDebug(isup,DebugAll,"decodeDigits decoded %s='%s' inn/ni=%u nai=%u plan=%u pres=%u scrn=%u",
 	param->name,tmp.c_str(),buf[1] >> 7,nai,plan,pres,scrn);
-    String preName(prefix + param->name);
+    String preName;
+    buildName(list,param,prefix,preName);
     list.addParam(preName,tmp);
     if (SS7MsgISUP::GenericNumber == param->type)
 	SignallingUtils::addKeyword(list,preName+".qualifier",s_dict_qual,qualifier);
@@ -407,6 +441,8 @@ static bool decodeDigits(const SS7ISUP* isup, NamedList& list, const IsupParam* 
 	case SS7MsgISUP::GenericNumber:
 	case SS7MsgISUP::LastDivertingLineIdentity:
 	case SS7MsgISUP::PresentationNumber:
+	case SS7MsgISUP::CalledINNumber:
+	case SS7MsgISUP::OriginalCalledINNumber:
 	    SignallingUtils::addKeyword(list,preName+".restrict",s_dict_presentation,pres);
 	default:
 	    break;
@@ -434,7 +470,9 @@ static bool decodeSubseq(const SS7ISUP* isup, NamedList& list, const IsupParam* 
     String tmp;
     getDigits(tmp,buf[0],buf+1,len-1,isup && isup->ignoreUnknownAddrSignals());
     DDebug(isup,DebugAll,"decodeSubseq decoded %s='%s'",param->name,tmp.c_str());
-    list.addParam(prefix+param->name,tmp);
+    String preName;
+    buildName(list,param,prefix,preName);
+    list.addParam(preName,tmp);
     return true;
 }
 
@@ -444,7 +482,8 @@ static bool decodeRangeSt(const SS7ISUP* isup, NamedList& list, const IsupParam*
 {
     if (len < 1)
 	return false;
-    String preName(prefix + param->name);
+    String preName;
+    buildName(list,param,prefix,preName);
     // 1st octet is the range code (range - 1)
     len--;
     unsigned int range = 1 + *buf++;
@@ -497,7 +536,9 @@ static bool decodeNotif(const SS7ISUP* isup, NamedList& list, const IsupParam* p
 	    break;
     }
     DDebug(isup,DebugAll,"decodeNotif decoded %s='%s'",param->name,flg.c_str());
-    list.addParam(prefix+param->name,flg);
+    String preName;
+    buildName(list,param,prefix,preName);
+    list.addParam(preName,flg);
     return true;
 }
 
@@ -505,14 +546,18 @@ static bool decodeNotif(const SS7ISUP* isup, NamedList& list, const IsupParam* p
 static bool decodeUSI(const SS7ISUP* isup, NamedList& list, const IsupParam* param,
     const unsigned char* buf, unsigned int len, const String& prefix)
 {
-    return SignallingUtils::decodeCaps(isup,list,buf,len,prefix+param->name,true);
+    String preName;
+    buildName(list,param,prefix,preName);
+    return SignallingUtils::decodeCaps(isup,list,buf,len,preName,true);
 }
 
 // Decoder for cause indicators
 static bool decodeCause(const SS7ISUP* isup, NamedList& list, const IsupParam* param,
     const unsigned char* buf, unsigned int len, const String& prefix)
 {
-    return SignallingUtils::decodeCause(isup,list,buf,len,prefix+param->name,true);
+    String preName;
+    buildName(list,param,prefix,preName);
+    return SignallingUtils::decodeCause(isup,list,buf,len,preName,true);
 }
 
 // Decoder for application transport parameter
@@ -539,6 +584,7 @@ static bool decodeAPT(const SS7ISUP* isup, NamedList& list, const IsupParam* par
 	return false;
     }
     len -= 3;
+    // WARNING: HACK - ApplicationTransport does not follow naming convention
     String preName(prefix + param->name);
     String context((int)(buf[0] & 0x7f));
     list.addParam(preName,context);
@@ -558,7 +604,8 @@ static bool decodeName(const SS7ISUP* isup, NamedList& list, const IsupParam* pa
     if (len < 1)
 	return false;
     String val((const char*)buf+1,len-1);
-    String preName(prefix + param->name);
+    String preName;
+    buildName(list,param,prefix,preName);
     list.addParam(preName,val);
     list.addParam(preName+".available",String::boolText((buf[0] & 0x10) == 0));
     SignallingUtils::addKeyword(list,preName+".qualifier",s_dict_qual_name,buf[0] & 0xe0);
@@ -573,7 +620,8 @@ static bool decodeRedir(const SS7ISUP* isup, NamedList& list, const IsupParam* p
 {
     if (len < 1)
 	return false;
-    String preName(prefix + param->name);
+    String preName;
+    buildName(list,param,prefix,preName);
     SignallingUtils::addKeyword(list,preName,s_dict_redir_main,buf[0] & 0x07);
     unsigned int reason = buf[0] >> 4;
     if (reason)
@@ -743,7 +791,11 @@ static unsigned char encodeDigits(const SS7ISUP* isup, SS7MSU& msu,
 	return 0;
     unsigned char nai = 2;
     unsigned char plan = 1;
-    String preName(prefix + param->name);
+    String preName;
+    if (val)
+	preName = val->name();
+    else
+	preName = prefix + param->name;
     int b0 = -1;
     if (SS7MsgISUP::GenericNumber == param->type) {
 	b0 = 0;
@@ -785,6 +837,8 @@ static unsigned char encodeDigits(const SS7ISUP* isup, SS7MSU& msu,
 	case SS7MsgISUP::GenericNumber:
 	case SS7MsgISUP::LastDivertingLineIdentity:
 	case SS7MsgISUP::PresentationNumber:
+	case SS7MsgISUP::CalledINNumber:
+	case SS7MsgISUP::OriginalCalledINNumber:
 	    if (val && extra)
 		b2 |= (extra->getIntValue(preName+".restrict",s_dict_presentation) & 3) << 2;
 	default:
@@ -808,7 +862,7 @@ static unsigned char encodeDigits(const SS7ISUP* isup, SS7MSU& msu,
 // Special encoder for subsequent number
 static unsigned char encodeSubseq(const SS7ISUP* isup, SS7MSU& msu,
     unsigned char* buf, const IsupParam* param, const NamedString* val,
-    const NamedList* extra, const String& prefix)
+    const NamedList*, const String&)
 {
     return setDigits(msu,val ? val->c_str() : 0,0);
 }
@@ -861,7 +915,7 @@ static unsigned char encodeRangeSt(const SS7ISUP* isup, SS7MSU& msu,
 // Encoder for generic notification indicators (Q.763 3.25)
 static unsigned char encodeNotif(const SS7ISUP* isup, SS7MSU& msu,
     unsigned char* buf, const IsupParam* param, const NamedString* val,
-    const NamedList* extra, const String& prefix)
+    const NamedList*, const String&)
 {
     if (!(param && val) || buf || param->size)
 	return 0;
@@ -897,8 +951,13 @@ static unsigned char encodeUSI(const SS7ISUP* isup, SS7MSU& msu,
 {
     if (!param)
 	return 0;
+    String preName;
+    if (val)
+	preName = val->name();
+    else
+	preName = prefix + param->name;
     DataBlock tmp;
-    SignallingUtils::encodeCaps(isup,tmp,*extra,prefix+param->name,true);
+    SignallingUtils::encodeCaps(isup,tmp,*extra,preName,true);
     DDebug(isup,DebugAll,"encodeUSI encoding %s on %u octets",param->name,tmp.length());
     if (tmp.length() < 1)
 	return 0;
@@ -913,8 +972,13 @@ static unsigned char encodeCause(const SS7ISUP* isup, SS7MSU& msu,
 {
     if (!param)
 	return 0;
+    String preName;
+    if (val)
+	preName = val->name();
+    else
+	preName = prefix + param->name;
     DataBlock tmp;
-    SignallingUtils::encodeCause(isup,tmp,*extra,prefix+param->name,true);
+    SignallingUtils::encodeCause(isup,tmp,*extra,preName,true);
     DDebug(isup,DebugAll,"encodeCause encoding %s on %u octets",param->name,tmp.length());
     if (tmp.length() < 1)
 	return 0;
@@ -949,6 +1013,7 @@ static unsigned char encodeAPT(const SS7ISUP* isup, SS7MSU& msu,
 	msu += data;
 	return 1 + data.length();
     }
+    // WARNING: HACK - ApplicationTransport does not follow naming convention
     String preName(prefix + param->name);
     preName << "." << context;
     unsigned char hdr[4] = {0,0x80 | context,0x80,0xc0};  // c0: extension bit set, new sequence bit set
@@ -990,7 +1055,11 @@ static unsigned char encodeName(const SS7ISUP* isup, SS7MSU& msu,
 	return 0;
     unsigned char gn[2] = { len, 3 };
     if (extra) {
-	String preName(prefix + param->name);
+	String preName;
+	if (val)
+	    preName = val->name();
+	else
+	    preName = prefix + param->name;
 	if (!extra->getBoolValue(preName+".available",true))
 	    gn[1] |= 0x10;
 	gn[1] = (gn[1] & 0x1f) |
@@ -1014,7 +1083,11 @@ static unsigned char encodeRedir(const SS7ISUP* isup, SS7MSU& msu,
 	return 0;
     unsigned char ri[3] = { 2, 0, 0 };
     if (extra) {
-	String preName(prefix + param->name);
+	String preName;
+	if (val)
+	    preName = val->name();
+	else
+	    preName = prefix + param->name;
 	ri[1] = (extra->getIntValue(preName,s_dict_redir_main,0) & 0x07) |
 	    ((extra->getIntValue(preName+".reason_original",s_dict_redir_reason,0) & 0x0f) << 4);
 	ri[2] = (extra->getIntValue(preName+".counter") & 0x07) |
@@ -1347,6 +1420,9 @@ static const IsupParam s_common_paramDefs[] = {
     MAKE_PARAM(CCSScallIndication,             1,0,             0,             0),                    // 3.63
     MAKE_PARAM(ForwardGVNS,                    0,0,             0,             0),                    // 3.66
     MAKE_PARAM(BackwardGVNS,                   0,0,             0,             0),                    // 3.62
+    MAKE_PARAM(CalledINNumber,                 0,decodeDigits,  encodeDigits,  0),                    // 3.73
+    MAKE_PARAM(UID_ActionIndicators,           0,0,             0,             0),                    // 3.78
+    MAKE_PARAM(UID_CapabilityIndicators,       0,0,             0,             0),                    // 3.79
     MAKE_PARAM(RedirectCapability,             0,0,             0,             0),                    // 3.96
     MAKE_PARAM(RedirectCounter,                0,0,             0,             0),                    // 3.97
     MAKE_PARAM(CCNRpossibleIndicator,          0,0,             0,             0),                    // 3.83
@@ -2312,6 +2388,7 @@ SignallingEvent* SS7ISUPCall::getEvent(const Time& when)
 		case SS7MsgISUP::CPR:
 		case SS7MsgISUP::ANM:
 		case SS7MsgISUP::CON:
+		case SS7MsgISUP::CRG:
 		    m_sgmMsg = msg;
 		    {
 			const char* sgmParam = "OptionalBackwardCallIndicators";
@@ -2566,6 +2643,15 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 	case SignallingEvent::Generic:
 	    if (event->message()) {
 		const String& oper = event->message()->params()[YSTRING("operation")];
+		if (oper == "charge") {
+		    if (!validMsgState(true,SS7MsgISUP::CRG))
+			break;
+		    SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::CRG,id());
+		    copyUpper(m->params(),event->message()->params());
+		    mylock.drop();
+		    result = transmitMessage(m);
+		    break;
+		}
 		if (oper != "transport")
 		    break;
 		if (!validMsgState(true,SS7MsgISUP::APM))
@@ -2619,6 +2705,16 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 	    }
 	//case SignallingEvent::Message:
 	//case SignallingEvent::Transfer:
+	case SignallingEvent::Charge:
+	    if (event->message()) {
+		if (!validMsgState(true,SS7MsgISUP::CRG))
+		    break;
+		SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::CRG,id());
+		copyUpper(m->params(),event->message()->params());
+		mylock.drop();
+		result = transmitMessage(m);
+	    }
+	    break;
 	default:
 	    DDebug(isup(),DebugStub,
 		"Call(%u). sendEvent not implemented for '%s' [%p]",
@@ -2870,6 +2966,7 @@ bool SS7ISUPCall::validMsgState(bool send, SS7MsgISUP::Type type, bool hasBkwCal
 		break;
 	    // fall through
 	case SS7MsgISUP::RLC:    // Release complete
+	case SS7MsgISUP::CRG:    // Charging
 	    if (m_state == Null || m_state == Released)
 		break;
 	    return true;
@@ -3209,6 +3306,9 @@ SignallingEvent* SS7ISUPCall::processSegmented(SS7MsgISUP* sgm, bool timeout)
 	    }
 	    m_lastEvent = new SignallingEvent(SignallingEvent::Answer,m_sgmMsg,this);
 	    break;
+	case SS7MsgISUP::CRG:
+	    m_lastEvent = new SignallingEvent(SignallingEvent::Charge,m_sgmMsg,this);
+	    break;
 	default:
 	    Debug(isup(),DebugStub,"Call(%u). Segment waiting message is '%s' [%p]",
 		id(),m_sgmMsg->name(),this);
@@ -3275,6 +3375,7 @@ SS7ISUP::SS7ISUP(const NamedList& params, unsigned char sio)
       m_duplicateCGB(false),
       m_ignoreUnkDigits(true),
       m_l3LinkUp(false),
+      m_chargeProcessType(Confusion),
       m_t1Interval(15000),               // Q.764 T1 15..60 seconds
       m_t5Interval(300000),              // Q.764 T5 5..15 minutes
       m_t7Interval(ISUP_T7_DEFVAL),      // Q.764 T7 20..30 seconds
@@ -3385,6 +3486,7 @@ SS7ISUP::SS7ISUP(const NamedList& params, unsigned char sio)
     m_ignoreCGUSingle = params.getBoolValue(YSTRING("ignore-cgu-single"));
     m_duplicateCGB = params.getBoolValue(YSTRING("duplicate-cgb"),
 	(SS7PointCode::ANSI == m_type || SS7PointCode::ANSI8 == m_type));
+    m_chargeProcessType = (ChargeProcess)params.getIntValue(YSTRING("charge-process"),s_dict_CRG_process,m_chargeProcessType);
     int testMsg = params.getIntValue(YSTRING("parttestmsg"),s_names,SS7MsgISUP::UPT);
     switch (testMsg) {
 	case SS7MsgISUP::CVT:
@@ -3480,6 +3582,7 @@ bool SS7ISUP::initialize(const NamedList* config)
 	m_replaceCounter = config->getIntValue(YSTRING("max_replaces"),3,0,31);
         m_ignoreUnkDigits = config->getBoolValue(YSTRING("ignore-unknown-digits"),true);
 	m_defaultSls = config->getIntValue(YSTRING("sls"),s_dict_callSls,m_defaultSls);
+	m_chargeProcessType = (ChargeProcess)config->getIntValue(YSTRING("charge-process"),s_dict_CRG_process,m_chargeProcessType);
 	m_mediaRequired = (MediaRequired)config->getIntValue(YSTRING("needmedia"),
 	    s_mediaRequired,m_mediaRequired);
         // Timers
@@ -4097,15 +4200,25 @@ void SS7ISUP::notify(SS7Layer3* link, int sls)
 SS7MSU* SS7ISUP::buildMSU(SS7MsgISUP::Type type, unsigned char sio,
     const SS7Label& label, unsigned int cic, const NamedList* params) const
 {
+    // Special treatment for charge message
+    // Check if it is in raw format
+    if (type == SS7MsgISUP::CRG && params && params->getParam(YSTRING("Charge")))
+	return encodeRawMessage(type,sio,label,cic,(*params)[YSTRING("Charge")]);
+
+    if (type == SS7MsgISUP::PAM && params)
+	return encodeRawMessage(type,sio,label,cic,(*params)[YSTRING("PassAlong")]);
     // see what mandatory parameters we should put in this message
     const MsgParams* msgParams = getIsupParams(label.type(),type);
     if (!msgParams) {
-	const char* name = SS7MsgISUP::lookup(type);
-	if (name)
-	    Debug(this,DebugWarn,"No parameter table for ISUP MSU type %s [%p]",name,this);
-	else
-	    Debug(this,DebugWarn,"Cannot create ISUP MSU type 0x%02x [%p]",type,this);
-	return 0;
+	if (!hasOptionalOnly(type)) {
+	    const char* name = SS7MsgISUP::lookup(type);
+	    if (name)
+		Debug(this,DebugWarn,"No parameter table for ISUP MSU type %s [%p]",name,this);
+	    else
+		Debug(this,DebugWarn,"Cannot create ISUP MSU type 0x%02x [%p]",type,this);
+	    return 0;
+	}
+	msgParams = &s_compatibility;
     }
     unsigned int len = m_cicLen + 1;
 
@@ -4216,6 +4329,13 @@ SS7MSU* SS7ISUP::buildMSU(SS7MsgISUP::Type type, unsigned char sio,
 		continue;
 	    String tmp(ns->name());
 	    tmp >> prefix.c_str();
+	    static const Regexp s_suffix("\\.[0-9]\\+$");
+	    if (tmp.matches(s_suffix)) {
+		tmp.assign(tmp,tmp.matchOffset());
+		// WARNING: HACK - ApplicationTransport does not follow naming convention
+		if (tmp == YSTRING("ApplicationTransport"))
+		    continue;
+	    }
 	    const IsupParam* param = getParamDesc(m_type,tmp);
 	    unsigned char size = 0;
 	    if (param)
@@ -4247,6 +4367,33 @@ SS7MSU* SS7ISUP::buildMSU(SS7MsgISUP::Type type, unsigned char sio,
     }
     return msu;
 }
+
+SS7MSU* SS7ISUP::encodeRawMessage(SS7MsgISUP::Type type, unsigned char sio,
+    const SS7Label& label, unsigned int cic, const String& param) const
+{
+    DataBlock raw;
+    if (!raw.unHexify(param.c_str(),param.length(),' ')) {
+	DDebug(this,DebugMild,"Encode raw charge failed: invalid string");
+	return 0;
+    }
+    if (raw.length() > 254) {
+	DDebug(this,DebugMild,"Encode raw charge failed: data length=%u",
+		raw.length());
+	return 0;
+    }
+    SS7MSU* msu = new SS7MSU(sio,label,0,m_cicLen + 1);
+    unsigned char* d = msu->getData(label.length()+1,m_cicLen + 1);
+    unsigned int i = m_cicLen;
+    while (i--) {
+	*d++ = cic & 0xff;
+	cic >>= 8;
+    }
+    *d++ = type;
+    *msu += raw;
+    return msu;
+}
+
+
 
 // Decode a buffer to a list of parameters
 bool SS7ISUP::decodeMessage(NamedList& msg,
@@ -4307,6 +4454,14 @@ bool SS7ISUP::decodeMessage(NamedList& msg,
 	return true;
     }
 
+    // Decode raw CRG if specified
+    if (msgType == SS7MsgISUP::CRG && getChargeProcessType() != Parsed) {
+	String raw;
+	raw.hexify((void*)paramPtr,paramLen,' ');
+	msg.addParam(prefix + "Charge",raw);
+	return true;
+    }
+
     String unsupported;
     const SS7MsgISUP::Parameters* plist = params->params;
     SS7MsgISUP::Parameters ptype;
@@ -4329,7 +4484,7 @@ bool SS7ISUP::decodeMessage(NamedList& msg,
 	if (!decodeParam(this,msg,param,paramPtr,param->size,prefix)) {
 	    Debug(this,DebugWarn,"Could not decode fixed ISUP parameter %s [%p]",param->name,this);
 	    decodeRaw(this,msg,param,paramPtr,param->size,prefix);
-	    unsupported.append(param->name,",");
+	    SignallingUtils::appendFlag(unsupported,param->name);
 	}
 	paramPtr += param->size;
 	paramLen -= param->size;
@@ -4362,7 +4517,7 @@ bool SS7ISUP::decodeMessage(NamedList& msg,
 	    Debug(this,DebugWarn,"Could not decode variable ISUP parameter %s (size=%u) [%p]",
 		param->name,size,this);
 	    decodeRaw(this,msg,param,paramPtr+offs+1,size,prefix);
-	    unsupported.append(param->name,",");
+	    SignallingUtils::appendFlag(unsupported,param->name);
 	}
 	paramPtr++;
 	paramLen--;
@@ -4405,12 +4560,12 @@ bool SS7ISUP::decodeMessage(NamedList& msg,
 		if (!param) {
 		    Debug(this,DebugMild,"Unknown optional ISUP parameter 0x%02x (size=%u) [%p]",ptype,size,this);
 		    decodeRawParam(this,msg,ptype,paramPtr,size,prefix);
-		    unsupported.append(String((unsigned int)ptype),",");
+		    SignallingUtils::appendFlag(unsupported,String((unsigned int)ptype));
 		}
 		else if (!decodeParam(this,msg,param,paramPtr,size,prefix)) {
 		    Debug(this,DebugWarn,"Could not decode optional ISUP parameter %s (size=%u) [%p]",param->name,size,this);
 		    decodeRaw(this,msg,param,paramPtr,size,prefix);
-		    unsupported.append(param->name,",");
+		    SignallingUtils::appendFlag(unsupported,param->name);
 		}
 		paramPtr += size;
 		paramLen -= size;
@@ -4432,13 +4587,13 @@ bool SS7ISUP::decodeMessage(NamedList& msg,
 	for (ObjList* ol = l->skipNull(); ol; ol = ol->skipNext()) {
 	    String* s = static_cast<String*>(ol->get());
 	    if (*s == YSTRING("release")) {
-		release.append(ns->name().substr(pCompat.length()),",");
+		SignallingUtils::appendFlag(release,ns->name().substr(pCompat.length()));
 		break;
 	    }
 	    if (*s == YSTRING("cnf"))
-		cnf.append(ns->name().substr(pCompat.length()),",");
+		SignallingUtils::appendFlag(cnf,ns->name().substr(pCompat.length()));
 	    if (*s == YSTRING("nopass-release"))
-		npRelease.append(ns->name().substr(pCompat.length()),",");
+		SignallingUtils::appendFlag(npRelease,ns->name().substr(pCompat.length()));
 	}
 	TelEngine::destruct(l);
     }
@@ -4632,6 +4787,16 @@ bool SS7ISUP::processMSU(SS7MsgISUP::Type type, unsigned int cic,
 	case SS7MsgISUP::SUS:
 	case SS7MsgISUP::RES:
 	    processCallMsg(msg,label,sls);
+	    break;
+	case SS7MsgISUP::CRG:
+	    switch (getChargeProcessType()) {
+		case Confusion:
+		    processControllerMsg(msg,label,sls);
+		case Ignore:
+		    break;
+		default:
+		    processCallMsg(msg,label,sls);
+	    }
 	    break;
 	case SS7MsgISUP::RLC:
 	    if (m_rscCic && m_rscCic->code() == msg->cic())
@@ -5240,7 +5405,7 @@ void SS7ISUP::processControllerMsg(SS7MsgISUP* msg, const SS7Label& label, int s
 	    if (call)
 		call->ref();
 	    unlock();
-	    if (m_dropOnUnknown && call && call->earlyState()) {
+	    if (m_dropOnUnknown && call && call->earlyState() && msg->type() != SS7MsgISUP::CRG) {
 		Debug(this,DebugNote,
 		    "Received unexpected message for call %u (%p) in initial state",
 		    msg->cic(),call);

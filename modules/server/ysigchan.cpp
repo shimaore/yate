@@ -1283,6 +1283,7 @@ void SigChannel::handleEvent(SignallingEvent* event)
 	case SignallingEvent::Charge:    evGeneric(event,"charge");    break;
 	case SignallingEvent::Suspend:   evGeneric(event,"suspend");   break;
 	case SignallingEvent::Resume:    evGeneric(event,"resume");    break;
+	case SignallingEvent::Charge:    evGeneric(event,"charge");    break;
 	default:
 	    DDebug(this,DebugStub,"No handler for event '%s' [%p]",
 		event->name(),this);
@@ -1297,7 +1298,10 @@ bool SigChannel::msgProgress(Message& msg)
     setState("progressing");
     if (!m_call)
 	return true;
-    bool media = msg.getBoolValue("earlymedia",getPeer() && getPeer()->getSource());
+    bool media = getPeer() && getPeer()->getSource();
+    media = media || (m_rtpForward && msg.getBoolValue("rtp_forward",true)
+	&& msg.getBoolValue("media"));
+    media = msg.getBoolValue("earlymedia",media);
     const char* format = msg.getValue("format");
     SignallingMessage* sm = new SignallingMessage;
     if (media && updateConsumer(format,false) && format)
@@ -1322,7 +1326,10 @@ bool SigChannel::msgRinging(Message& msg)
     setState("ringing");
     if (!m_call)
 	return true;
-    bool media = msg.getBoolValue("earlymedia",getPeer() && getPeer()->getSource());
+    bool media = getPeer() && getPeer()->getSource();
+    media = media || (m_rtpForward && msg.getBoolValue("rtp_forward",true)
+	&& msg.getBoolValue("media"));
+    media = msg.getBoolValue("earlymedia",media);
     const char* format = msg.getValue("format");
     SignallingMessage* sm = new SignallingMessage;
     if (media && updateConsumer(format,false) && format)
@@ -1443,6 +1450,8 @@ bool SigChannel::msgUpdate(Message& msg)
 	evt = SignallingEvent::Progress;
     else if (oper == YSTRING("ringing"))
 	evt = SignallingEvent::Ringing;
+    else if (oper == YSTRING("charge"))
+	evt = SignallingEvent::Charge;
     else if (m_callAccdEvent && (oper == YSTRING("accepted"))) {
 	plugin.copySigMsgParams(m_callAccdEvent,msg,"i");
 	releaseCallAccepted(true);

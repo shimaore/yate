@@ -717,17 +717,17 @@ static bool oneContext(Message &msg, String &str, const String &context, String 
 bool RouteHandler::received(Message &msg)
 {
     u_int64_t tmr = Time::now();
-    String called(msg.getValue("called"));
+    String called(msg.getValue(YSTRING("called")));
     if (called.null())
 	return false;
-    const char *context = msg.getValue("context","default");
+    const char *context = msg.getValue(YSTRING("context"),"default");
     Lock lock(s_mutex);
     if (oneContext(msg,called,context,msg.retValue())) {
-	Debug(DebugInfo,"Routing call to '%s' in context '%s' via '%s' in " FMT64 " usec",
+	Debug(DebugInfo,"Routing call to '%s' in context '%s' via '%s' in " FMT64U " usec",
 	    called.c_str(),context,msg.retValue().c_str(),Time::now()-tmr);
 	return true;
     }
-    Debug(DebugInfo,"Could not route call to '%s' in context '%s', wasted " FMT64 " usec",
+    Debug(DebugInfo,"Could not route call to '%s' in context '%s', wasted " FMT64U " usec",
 	called.c_str(),context,Time::now()-tmr);
     return false;
 };
@@ -746,10 +746,10 @@ bool PrerouteHandler::received(Message &msg)
 {
     u_int64_t tmr = Time::now();
     // return immediately if there is already a context
-    if (!s_prerouteall && msg.getValue("context"))
+    if (!s_prerouteall && msg.getValue(YSTRING("context")))
 	return false;
 
-    String caller(msg.getValue("caller"));
+    String caller(msg.getValue(YSTRING("caller")));
     if (!s_prerouteall && caller.null())
 	return false;
 
@@ -758,7 +758,10 @@ bool PrerouteHandler::received(Message &msg)
     if (oneContext(msg,caller,"contexts",ret)) {
 	Debug(DebugInfo,"Classifying caller '%s' in context '%s' in " FMT64 " usec",
 	    caller.c_str(),ret.c_str(),Time::now()-tmr);
-	msg.addParam("context",ret);
+	if (ret == YSTRING("-") || ret == YSTRING("error"))
+	    msg.retValue() = ret;
+	else
+	    msg.setParam("context",ret);
 	return true;
     }
     Debug(DebugInfo,"Could not classify call from '%s', wasted " FMT64 " usec",

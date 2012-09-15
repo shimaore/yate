@@ -38,7 +38,7 @@
 #ifndef _WORDSIZE
 #if defined(__arch64__) || defined(__x86_64__) \
     || defined(__amd64__) || defined(__ia64__) \
-    || defined(__alpha__) || defined(__sparcv9)
+    || defined(__alpha__) || defined(__sparcv9) || defined(__mips64)
 #define _WORDSIZE 64
 #else
 #define _WORDSIZE 32
@@ -5665,6 +5665,15 @@ public:
      * @param params List of parameters
      */
     virtual bool setParams(const NamedList& params)
+	{ return false; }
+
+    /**
+     * Get specific socket parameters.
+     * @param params Coma separated list of parameters to obtain
+     * @param result List of parameters to fill
+     * @return True if operation was successful, false if an error occurred
+     */
+    virtual bool getParams(const String& params, NamedList& result)
 	{ return false; }
 
     /**

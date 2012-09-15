@@ -173,7 +173,8 @@ SIPEngine::SIPEngine(const char* userAgent)
       m_maxForwards(70),
       m_cseq(0), m_flags(0), m_lazyTrying(false),
       m_userAgent(userAgent), m_nc(0), m_nonce_time(0),
-      m_nonce_mutex(false,"SIPEngine::nonce")
+      m_nonce_mutex(false,"SIPEngine::nonce"),
+      m_autoChangeParty(false)
 {
     debugName("sipengine");
     DDebug(this,DebugInfo,"SIPEngine::SIPEngine() [%p]",this);
@@ -277,31 +278,31 @@ bool SIPEngine::process()
 SIPEvent* SIPEngine::getEvent()
 {
     Lock lock(this);
-    ObjList* l = &m_transList;
-    for (; l; l = l->next()) {
+    ObjList* l = m_transList.skipNull();
+    if (!l)
+	return 0;
+    u_int64_t time = Time::now();
+    for (; l; l = l->skipNext()) {
 	SIPTransaction* t = static_cast<SIPTransaction*>(l->get());
-	if (t) {
-	    SIPEvent* e = t->getEvent(true);
-	    if (e) {
-		DDebug(this,DebugInfo,"Got pending event %p (state %s) from transaction %p [%p]",
-		    e,SIPTransaction::stateName(e->getState()),t,this);
-		if (t->getState() == SIPTransaction::Invalid)
-		    m_transList.remove(t);
-		return e;
-	    }
+	SIPEvent* e = t->getEvent(true,time);
+	if (e) {
+	    DDebug(this,DebugInfo,"Got pending event %p (state %s) from transaction %p [%p]",
+		e,SIPTransaction::stateName(e->getState()),t,this);
+	    if (t->getState() == SIPTransaction::Invalid)
+		m_transList.remove(t);
+	    return e;
 	}
     }
-    for (l = &m_transList; l; l = l->next()) {
+    time = Time::now();
+    for (l = m_transList.skipNull(); l; l = l->skipNext()) {
 	SIPTransaction* t = static_cast<SIPTransaction*>(l->get());
-	if (t) {
-	    SIPEvent* e = t->getEvent(false);
-	    if (e) {
-		DDebug(this,DebugInfo,"Got event %p (state %s) from transaction %p [%p]",
-		    e,SIPTransaction::stateName(e->getState()),t,this);
-		if (t->getState() == SIPTransaction::Invalid)
-		    m_transList.remove(t);
-		return e;
-	    }
+	SIPEvent* e = t->getEvent(false,time);
+	if (e) {
+	    DDebug(this,DebugInfo,"Got event %p (state %s) from transaction %p [%p]",
+		e,SIPTransaction::stateName(e->getState()),t,this);
+	    if (t->getState() == SIPTransaction::Invalid)
+		m_transList.remove(t);
+	    return e;
 	}
     }
     return 0;

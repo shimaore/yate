@@ -101,6 +101,7 @@ static bool s_drill = false;
 
 static Thread::Priority s_priority = Thread::Normal;
 static int s_tos     = 0;
+static int s_udpbuf  = 0;
 static int s_sleep   = 5;
 static int s_interval= 0;
 static int s_timeout = 0;
@@ -204,7 +205,7 @@ class YRTPSession : public RTPSession
 {
 public:
     inline YRTPSession(YRTPWrapper* wrap)
-	: m_wrap(wrap), m_lastLost(0),
+	: m_wrap(wrap), m_lastLost(0), m_newPayload(-1),
 	  m_resync(false), m_anyssrc(false), m_getFax(true)
 	{ }
     virtual ~YRTPSession();
@@ -225,6 +226,7 @@ protected:
 private:
     YRTPWrapper* m_wrap;
     u_int32_t m_lastLost;
+    int m_newPayload;
     bool m_resync;
     bool m_anyssrc;
     bool m_getFax;
@@ -635,6 +637,7 @@ bool YRTPWrapper::startRTP(const char* raddr, unsigned int rport, Message& msg)
     int evpayload = msg.getIntValue(YSTRING("evpayload"),101);
     const char* format = msg.getValue(YSTRING("format"));
     int tos = msg.getIntValue(YSTRING("tos"),dict_tos,s_tos);
+    int buflen = msg.getIntValue(YSTRING("buffer"),s_udpbuf);
     int msec = msg.getIntValue(YSTRING("msleep"),s_sleep);
 
     if (!format)
@@ -716,6 +719,8 @@ bool YRTPWrapper::startRTP(const char* raddr, unsigned int rport, Message& msg)
     m_rtp->dataPayload(payload);
     m_rtp->eventPayload(evpayload);
     m_rtp->setTOS(tos);
+    if (buflen > 0)
+	m_rtp->setBuffer(buflen);
     m_rtp->padding(msg.getIntValue(YSTRING("padding"),s_padding));
     if (msg.getBoolValue(YSTRING("drillhole"),s_drill)) {
 	bool ok = m_rtp->drillHole();
@@ -778,7 +783,7 @@ bool YRTPWrapper::setupSRTP(Message& msg, bool buildMaster)
 	if (srtp)
 	    srtp = new RTPSecure(*srtp);
 	else
-	    srtp = new RTPSecure(msg.getValue(YSTRING("crypto_suite")));
+	    srtp = new RTPSecure(msg[YSTRING("crypto_suite")]);
     }
     else
 	buildMaster = false;
@@ -1021,6 +1026,10 @@ void YRTPSession::rtpNewPayload(int payload, unsigned int timestamp)
     if (payload == 13) {
 	Debug(&splugin,DebugInfo,"Activating RTP silence payload %d in wrapper %p",payload,m_wrap);
 	silencePayload(payload);
+    }
+    else if (payload != m_newPayload) {
+	m_newPayload = payload;
+	Debug(&splugin,DebugMild,"Unexpected payload %d in wrapper %p",payload,m_wrap);
     }
 }
 
@@ -1333,7 +1342,7 @@ bool AttachHandler::received(Message &msg)
 	return false;
 
     const char* media = msg.getValue(YSTRING("media"),"audio");
-    String rip(msg.getValue(YSTRING("remoteip")));
+    const String& rip = msg[YSTRING("remoteip")];
     CallEndpoint* ch = YOBJECT(CallEndpoint,msg.userData());
     if (!ch) {
 	if (!src.null())
@@ -1345,7 +1354,7 @@ bool AttachHandler::received(Message &msg)
 
     RefPointer<YRTPWrapper> w = YRTPWrapper::find(ch,media);
     if (!w)
-	w = YRTPWrapper::find(msg.getValue(YSTRING("rtpid")));
+	w = YRTPWrapper::find(msg[YSTRING("rtpid")]);
     if (!w) {
 	String lip(msg.getValue(YSTRING("localip")));
 	if (lip.null())
@@ -1384,7 +1393,7 @@ bool AttachHandler::received(Message &msg)
 bool RtpHandler::received(Message &msg)
 {
     bool udptl = false;
-    String trans = msg.getValue(YSTRING("transport"));
+    const String& trans = msg[YSTRING("transport")];
     if (trans && !trans.startsWith("RTP/")) {
 	if (trans &= "udptl")
 	    udptl = true;
@@ -1393,7 +1402,7 @@ bool RtpHandler::received(Message &msg)
     }
     Debug(&splugin,DebugAll,"%s message received",(trans ? trans.c_str() : "No-transport"));
     bool terminate = msg.getBoolValue(YSTRING("terminate"),false);
-    String dir(msg.getValue(YSTRING("direction")));
+    const String& dir = msg[YSTRING("direction")];
     RTPSession::Direction direction = terminate ? RTPSession::FullStop : RTPSession::SendRecv;
     bool d_recv = false;
     bool d_send = false;
@@ -1418,16 +1427,21 @@ bool RtpHandler::received(Message &msg)
     if (w)
 	Debug(&splugin,DebugAll,"Wrapper %p found by CallEndpoint %p",(YRTPWrapper*)w,ch);
     else {
-	const char* rid = msg.getValue(YSTRING("rtpid"));
+	const String& rid = msg[YSTRING("rtpid")];
 	w = YRTPWrapper::find(rid);
 	if (w)
-	    Debug(&splugin,DebugAll,"Wrapper %p found by ID '%s'",(YRTPWrapper*)w,rid);
+	    Debug(&splugin,DebugAll,"Wrapper %p found by ID '%s'",(YRTPWrapper*)w,rid.c_str());
     }
     if (w)
 	w->deref();
     if (terminate) {
 	if (w) {
+	    if (w->host())
+		msg.setParam("localip",w->host());
+	    if (w->port())
+		msg.setParam("localport",String(w->port()));
 	    w->terminate(msg);
+	    msg.setParam("status","terminated");
 	    return true;
 	}
 	return false;
@@ -1437,7 +1451,8 @@ bool RtpHandler::received(Message &msg)
 	return false;
     }
 
-    String rip(msg.getValue(YSTRING("remoteip")));
+    const String& rip = msg[YSTRING("remoteip")];
+    const char* status = "updated";
 
     if (!w) {
 	// it would be pointless to create an unreferenced wrapper
@@ -1451,6 +1466,7 @@ bool RtpHandler::received(Message &msg)
 	    return false;
 	}
 
+	status = "created";
 	w = new YRTPWrapper(lip,ch,media,direction,msg,udptl);
 	w->setMaster(msg.getValue(YSTRING("id")));
 
@@ -1495,6 +1511,7 @@ bool RtpHandler::received(Message &msg)
     msg.setParam("localip",w->host());
     msg.setParam("localport",String(w->port()));
     msg.setParam("rtpid",w->id());
+    msg.setParam("status",status);
 
     if (msg.getBoolValue(YSTRING("getsession"),!msg.userData()))
 	msg.userData(w);
@@ -1504,10 +1521,10 @@ bool RtpHandler::received(Message &msg)
 
 bool DTMFHandler::received(Message &msg)
 {
-    String targetid(msg.getValue(YSTRING("targetid")));
+    const String& targetid = msg[YSTRING("targetid")];
     if (targetid.null())
 	return false;
-    String text(msg.getValue(YSTRING("text")));
+    const String& text = msg[YSTRING("text")];
     if (text.null())
 	return false;
     RefPointer<YRTPWrapper> wrap = YRTPWrapper::find(targetid);
@@ -1837,6 +1854,7 @@ void YRTPPlugin::initialize()
     s_minJitter = cfg.getIntValue("general","minjitter",50);
     s_maxJitter = cfg.getIntValue("general","maxjitter",Engine::clientMode() ? 120 : 0);
     s_tos = cfg.getIntValue("general","tos",dict_tos);
+    s_udpbuf = cfg.getIntValue("general","udpbuf",0);
     s_localip = cfg.getValue("general","localip");
     s_autoaddr = cfg.getBoolValue("general","autoaddr",true);
     s_anyssrc = cfg.getBoolValue("general","anyssrc",true);

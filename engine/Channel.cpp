@@ -68,6 +68,8 @@ static Mutex s_callidMutex(false,"CallID");
 //  of call endpoints at the same time
 static Mutex s_mutex(true,"CallEndpoint");
 static const String s_audioType = "audio";
+static const String s_copyParams = "copyparams";
+
 
 CallEndpoint::CallEndpoint(const char* id)
     : m_peer(0), m_id(id), m_mutex(0)
@@ -424,6 +426,7 @@ void Channel::initChan()
     }
 #endif
     m_driver->m_total++;
+    m_driver->m_chanCount++;
     m_driver->channels().append(this);
     m_driver->changed();
 }
@@ -435,8 +438,11 @@ void Channel::dropChan()
     m_driver->lock();
     if (!m_driver)
 	Debug(DebugFail,"Driver lost in dropChan! [%p]",this);
-    if (m_driver->channels().remove(this,false))
+    if (m_driver->channels().remove(this,false)) {
+	if (m_driver->m_chanCount > 0)
+	    m_driver->m_chanCount--;
 	m_driver->changed();
+    }
     m_driver->unlock();
 }
 
@@ -596,7 +602,7 @@ Message* Channel::message(const char* name, const NamedList* original, const cha
     Message* msg = message(name,minimal,data);
     if (original) {
 	if (!params)
-	    params = original->getValue(YSTRING("copyparams"));
+	    params = original->getValue(s_copyParams);
 	if (!null(params))
 	    msg->copyParams(*original,params);
     }
@@ -828,6 +834,14 @@ void Channel::callConnect(Message& msg)
 void Channel::callRejected(const char* error, const char* reason, const Message* msg)
 {
     Debug(this,DebugMild,"Call rejected error='%s' reason='%s' [%p]",error,reason,this);
+    if (msg) {
+	const String* cp = msg->getParam(s_copyParams);
+	if (!TelEngine::null(cp)) {
+	    s_paramMutex.lock();
+	    parameters().copyParams(*msg,*cp);
+	    s_paramMutex.unlock();
+	}
+    }
     status("rejected");
 }
 
@@ -1229,7 +1243,7 @@ Driver::Driver(const char* name, const char* type)
       m_init(false), m_varchan(true),
       m_routing(0), m_routed(0), m_total(0),
       m_nextid(0), m_timeout(0),
-      m_maxroute(0), m_maxchans(0), m_dtmfDups(false)
+      m_maxroute(0), m_maxchans(0), m_chanCount(0), m_dtmfDups(false)
 {
     m_prefix << name << "/";
 }
@@ -1273,7 +1287,7 @@ void Driver::setup(const char* prefix, bool minimal)
 
 bool Driver::isBusy() const
 {
-    return (m_routing || m_chans.count());
+    return (m_routing || m_chanCount);
 }
 
 Channel* Driver::find(const String& id) const
@@ -1425,10 +1439,8 @@ bool Driver::canAccept(bool routers)
 	return false;
     if (routers && !canRoute())
 	return false;
-    if (m_maxchans) {
-	Lock mylock(this);
-	return ((signed)m_chans.count() < m_maxchans);
-    }
+    if (m_maxchans)
+	return (m_chanCount < m_maxchans);
     return true;
 }
 
@@ -1468,7 +1480,7 @@ void Driver::genUpdate(Message& msg)
     msg.addParam("routed",String(m_routed));
     msg.addParam("routing",String(m_routing));
     msg.addParam("total",String(m_total));
-    msg.addParam("chans",String(m_chans.count()));
+    msg.addParam("chans",String(m_chanCount));
 }
 
 void Driver::statusModule(String& str)
@@ -1483,7 +1495,7 @@ void Driver::statusParams(String& str)
     str.append("routed=",",") << m_routed;
     str << ",routing=" << m_routing;
     str << ",total=" << m_total;
-    str << ",chans=" << m_chans.count();
+    str << ",chans=" << m_chanCount;
 }
 
 void Driver::statusDetail(String& str)
@@ -1594,6 +1606,12 @@ bool Router::route()
 		Debug(m_driver,DebugInfo,"Connection '%s' vanished while prerouting!",m_id.c_str());
 		return false;
 	    }
+	    const String* cp = m_msg->getParam(s_copyParams);
+	    if (!TelEngine::null(cp)) {
+		Channel::paramMutex().lock();
+		chan->parameters().copyParams(*m_msg,*cp);
+		Channel::paramMutex().unlock();
+	    }
 	    bool dropCall = ok && ((m_msg->retValue() == YSTRING("-")) || (m_msg->retValue() == YSTRING("error")));
 	    if (dropCall)
 		chan->callRejected(m_msg->getValue(YSTRING("error"),"unknown"),
@@ -1650,6 +1668,9 @@ bool Router::route()
 		const char* reason = m_msg->getValue(YSTRING("reason"),
 		    ((s_noconn == error) ? "Could not connect to target" : (const char*)0));
 		Message m(s_disconnected);
+		const String* cp = m_msg->getParam(s_copyParams);
+		if (!TelEngine::null(cp))
+		    m.copyParams(*m_msg,*cp);
 		chan->complete(m);
 		m.setParam("error",error);
 		m.setParam("reason",reason);
