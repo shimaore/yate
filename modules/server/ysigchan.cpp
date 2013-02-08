@@ -660,7 +660,7 @@ public:
     static const TokenDict s_compNames[];
     static const TokenDict s_compClass[];
 protected:
-    virtual SignallingComponent* create(const String& type, const NamedList& name);
+    virtual SignallingComponent* create(const String& type, NamedList& name);
 };
 
 // Consumer used to push data to SigSourceMux
@@ -820,7 +820,8 @@ class GTTranslator : public GTT
 public:
     GTTranslator(const NamedList& params);
     virtual ~GTTranslator();
-    virtual NamedList* routeGT(const NamedList& gt, const String& prefix);
+    virtual NamedList* routeGT(const NamedList& gt, const String& prefix,
+	    const String& nextPrefix);
     virtual bool initialize(const NamedList* config);
     virtual void updateTables(const NamedList& params);
 };
@@ -941,7 +942,7 @@ public:
 
 
 // Construct a locally configured component
-SignallingComponent* SigFactory::create(const String& type, const NamedList& name)
+SignallingComponent* SigFactory::create(const String& type, NamedList& name)
 {
     const NamedList* config = s_cfg.getSection(name);
     DDebug(&plugin,DebugAll,"SigFactory::create('%s','%s') config=%p",
@@ -960,7 +961,9 @@ SignallingComponent* SigFactory::create(const String& type, const NamedList& nam
 	    else
 		return 0;
 	}
-    }
+    } else if (name.getBoolValue(YSTRING("local-config"),false))
+	name.copyParams(*config);
+
     String* ty = config->getParam("type");
     switch (compType) {
 	case SigISDNLayer2:
@@ -1294,6 +1297,7 @@ void SigChannel::handleEvent(SignallingEvent* event)
 
 bool SigChannel::msgProgress(Message& msg)
 {
+    Channel::msgProgress(msg);
     Lock lock(m_mutex);
     setState("progressing");
     if (!m_call)
@@ -1322,6 +1326,7 @@ bool SigChannel::msgProgress(Message& msg)
 
 bool SigChannel::msgRinging(Message& msg)
 {
+    Channel::msgRinging(msg);
     Lock lock(m_mutex);
     setState("ringing");
     if (!m_call)
@@ -1359,6 +1364,7 @@ bool SigChannel::msgRinging(Message& msg)
 
 bool SigChannel::msgAnswered(Message& msg)
 {
+    Channel::msgAnswered(msg);
     Lock lock(m_mutex);
     setState("answered");
     if (!m_call)
@@ -1675,16 +1681,17 @@ void SigChannel::setState(const char* state, bool updateStatus, bool showReason)
 	    m_call,this);
 	return;
     }
+#ifndef DEBUG
+    if (!updateStatus)
+	return;
+#endif
     String show;
     show << "Call " << state;
     if (showReason)
 	show << ". Reason: '" << m_reason << "'";
     if (!m_call)
         show << ". No signalling call ";
-    if (updateStatus)
-	Debug(this,DebugCall,"%s [%p]",show.c_str(),this);
-    else
-	DDebug(this,DebugCall,"%s [%p]",show.c_str(),this);
+    Debug(this,DebugCall,"%s [%p]",show.c_str(),this);
 }
 
 void SigChannel::evInfo(SignallingEvent* event)
@@ -2144,7 +2151,7 @@ SigDriver::~SigDriver()
 
 bool SigDriver::msgExecute(Message& msg, String& dest)
 {
-    Channel* peer = static_cast<Channel*>(msg.userData());
+    CallEndpoint* peer = YOBJECT(CallEndpoint,msg.userData());
     if (!peer) {
 	Debug(this,DebugNote,"Signalling call failed. No data channel");
 	msg.setParam("error","failure");
@@ -3361,7 +3368,7 @@ bool SigSCCPUser::initialize(NamedList& params)
 
 SigSccpGtt::~SigSccpGtt()
 {
-    DDebug(&plugin,DebugAll,"Destroing SigSccpGtt [%p]",this);
+    DDebug(&plugin,DebugAll,"Destroying SigSccpGtt [%p]",this);
     if (m_gtt) {
 	plugin.engine()->remove(m_gtt);
 	TelEngine::destruct(m_gtt);
@@ -3525,7 +3532,10 @@ SignallingCircuitGroup* SigTrunk::buildCircuits(NamedList& params, const String&
 	if (s->null())
 	    continue;
 	NamedList spanParams(*s);
-	spanParams.copySubParams(params,*s + ".");
+	if (params.hasSubParams(*s + "."))
+	    spanParams.copySubParams(params,*s + ".");
+	else
+	    spanParams.addParam("local-config","true");
 	SignallingCircuitSpan* span = group->buildSpan(*s,start,&spanParams);
 	if (!span) {
 	    error << "Failed to build voice span '" << *s << "'";
@@ -4763,6 +4773,7 @@ IsupDecodeHandler::IsupDecodeHandler(bool decode)
 void IsupDecodeHandler::destruct()
 {
     SignallingEngine::destruct(m_isup);
+    MessageHandler::destruct();
 }
 
 bool IsupDecodeHandler::received(Message& msg)
@@ -4917,7 +4928,7 @@ SCCPUserDummy::SCCPUserDummy(const NamedList& params)
 
 SCCPUserDummy::~SCCPUserDummy()
 {
-    Debug(&plugin,DebugAll,"Destroing SCCPUserDummy [%p]",this);
+    Debug(&plugin,DebugAll,"Destroying SCCPUserDummy [%p]",this);
 }
 
 HandledMSU SCCPUserDummy::receivedData(DataBlock& data, NamedList& params)
@@ -4975,25 +4986,32 @@ bool SCCPUserDummy::managementNotify(SCCP::Type type, NamedList &params)
  */
 
 GTTranslator::GTTranslator(const NamedList& params)
-    : GTT(params)
+    : SignallingComponent(params.safe("GTT"),&params,"ss7-gtt"),
+      GTT(params)
 {
     DDebug(this,DebugAll,"Crated Global Title Translator [%p]",this);
 }
 
 GTTranslator::~GTTranslator()
 {
-    DDebug(this,DebugAll,"Destroing Global Title Translator [%p]",this);
+    DDebug(this,DebugAll,"Destroying Global Title Translator [%p]",this);
 }
 
-NamedList* GTTranslator::routeGT(const NamedList& gt, const String& prefix)
+NamedList* GTTranslator::routeGT(const NamedList& gt, const String& prefix, const String& nextPrefix)
 {
     // TODO keep a cache!!
-    // Verify iff the requested gt exists in cache
+    // Verify if the requested gt exists in cache
     // if exists return the cached translation of th GT
     // if not exists send it for translation
     Message* msg = new Message("sccp.route");
+    const char* name = sccp() ? sccp()->toString().c_str() : (const char*)0;
+    msg->addParam("component",name,false);
+    msg->addParam("translator",toString(),false);
     msg->copyParam(gt,YSTRING("HopCounter"));
     msg->copyParam(gt,YSTRING("MessageReturn"));
+    msg->copyParam(gt,YSTRING("LocalPC"));
+    msg->copyParam(gt,YSTRING("generated"));
+    msg->copySubParams(gt,nextPrefix + ".",false);
     msg->copySubParams(gt,prefix + ".");
     if (Engine::dispatch(msg)) // Append the translated GT to cache
 	return msg;

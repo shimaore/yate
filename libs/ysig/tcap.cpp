@@ -53,6 +53,10 @@ void TCAPUser::destroyed()
     Debug(this,DebugAll,"TCAPUser::destroyed() [%p]",this);
     Lock lock(m_tcapMtx);
     if (m_tcap) {
+	// notify SCCP OutOfService
+	NamedList p("");
+	m_tcap->updateUserStatus(this,SCCPManagement::UserOutOfService,p);
+
 	m_tcap->detach(this);
 	Debug(this,DebugAll,"TCAPUser::~TCAPUser() [%p] - Detached from TCAP (%p,%s)",this,m_tcap,m_tcap->toString().safe());
 	m_tcap->deref();
@@ -269,6 +273,7 @@ SS7TCAP::SS7TCAP(const NamedList& params)
 {
     Debug(this,DebugAll,"SS7TCAP::SS7TCAP() [%p] created",this);
     m_recvMsgs = m_sentMsgs = m_discardMsgs = m_normalMsgs = m_abnormalMsgs = 0;
+    m_ssnStatus = SCCPManagement::UserOutOfService;
 }
 
 SS7TCAP::~SS7TCAP()
@@ -322,7 +327,13 @@ bool SS7TCAP::initialize(const NamedList* config)
 	s_printMsgs = config->getBoolValue(YSTRING("print-messages"),false);
 	s_extendedDbg = config->getBoolValue(YSTRING("extended-debug"),false);
     }
-    return SCCPUser::initialize(config);
+    bool ok = SCCPUser::initialize(config);
+    if (ok) {
+	NamedList p("");
+	sendSCCPNotify(p);
+	Debug(this,DebugInfo,"SSN=%d has status='%s'[%p]",m_SSN,lookup(m_ssnStatus,SCCPManagement::broadcastType(),""),this);
+    }
+    return ok;
 }
 
 bool SS7TCAP::sendData(DataBlock& data, NamedList& params)
@@ -406,6 +417,56 @@ bool SS7TCAP::managementNotify(SCCP::Type type, NamedList& params)
     if (type == SCCP::SubsystemStatus)
 	params.setParam("subsystem-status",(inService ? "UserInService" : "UserOutOfService"));
     return ok;
+}
+
+void SS7TCAP::updateUserStatus(TCAPUser* user, SCCPManagement::LocalBroadcast status, NamedList& params)
+{
+    if (!user)
+	return;
+    DDebug(this,DebugAll,"SS7TCAP::updateUserStatus(user=%s[%p],status=%d) [%p]",user->toString().c_str(),user,status,this);
+    bool notify = false;
+    Lock l(m_usersMtx);
+    SCCPManagement::LocalBroadcast tmp = m_ssnStatus;
+    switch (m_ssnStatus) {
+	case SCCPManagement::UserOutOfService:
+	    if (status == SCCPManagement::UserInService) {
+		m_ssnStatus = SCCPManagement::UserInService;
+		notify = true;
+	    }
+	    break;
+	case SCCPManagement::UserInService:
+	    if (status == SCCPManagement::UserOutOfService) {
+		ListIterator it(m_users);
+		for (;;) {
+		    TCAPUser* usr = static_cast<TCAPUser*>(it.get());
+		    // End of iteration?
+		    if (!usr) {
+			m_ssnStatus = SCCPManagement::UserOutOfService;
+			notify = true;
+			break;
+		    }
+		    if (usr->managementState() == (int) SCCPManagement::UserInService)
+			break;
+		}
+	    }
+	default:
+	    break;
+    }
+    
+    if (notify) {
+	sendSCCPNotify(params); // it always returns false, so no point in checking result
+	Debug(this,DebugInfo,"SSN=%d changed status from '%s' to '%s' [%p]",m_SSN,
+		  lookup(tmp,SCCPManagement::broadcastType(),""),lookup(m_ssnStatus,SCCPManagement::broadcastType(),""),this);
+    }
+}
+
+bool SS7TCAP::sendSCCPNotify(NamedList& params)
+{
+    params.setParam(YSTRING("subsystem-status"),lookup(m_ssnStatus,SCCPManagement::broadcastType(),""));
+    params.setParam(YSTRING("ssn"),String(m_SSN));
+    if (!params.getParam(YSTRING("smi")))
+	    params.setParam("smi","0");
+    return sccpNotify(SCCP::StatusRequest,params);
 }
 
 void SS7TCAP::attach(TCAPUser* user)
@@ -698,6 +759,12 @@ HandledMSU SS7TCAP::processSCCPData(SS7TCAPMessage* msg)
 		tr->setState(SS7TCAPTransaction::Idle);
 	    else
 		tr->setTransmitState(SS7TCAPTransaction::Transmitted);
+	}
+	else if (type != SS7TCAP::TC_Notice) {
+	    tr->update(SS7TCAP::TC_U_Abort,msgParams,false);
+	    buildSCCPData(msgParams,tr);
+	    tr->setTransmitState(SS7TCAPTransaction::Transmitted);
+	    tr->updateState(false);
 	}
 	else
 	    tr->setState(SS7TCAPTransaction::Idle);
@@ -1415,9 +1482,8 @@ void SS7TCAPTransaction::checkComponents()
 		case SS7TCAP::TC_InvokeNotLast:
 			if (comp->operationClass() != SS7TCAP::NoReport) {
 			    index++;
+			    comp->setType(SS7TCAP::TC_L_Cancel);
 			    comp->fill(index,params);
-			    compPrefix(paramRoot,index,false);
-			    params.setParam(paramRoot + ".componentType",lookup(SS7TCAP::TC_L_Cancel,SS7TCAP::s_compPrimitives,"L_Cancel"));
 			}
 			comp->setState(SS7TCAPComponent::Idle);
 		    break;
@@ -1549,6 +1615,8 @@ SS7TCAPComponent::SS7TCAPComponent(SS7TCAP::TCAPType type, SS7TCAPTransaction* t
 
     setState(OperationPending);
 
+    m_opType = params.getValue(paramRoot + s_tcapOpCodeType,"");
+    m_opCode = params.getValue(paramRoot + s_tcapOpCode,"");
     NamedString* opClass = params.getParam(paramRoot + "operationClass");
     if (!TelEngine::null(opClass))
 	m_opClass = (SS7TCAP::TCAPComponentOperationClass) opClass->toInteger(SS7TCAP::s_compOperClasses,SS7TCAP::SuccessOrFailureReport);
@@ -1585,6 +1653,7 @@ void SS7TCAPComponent::update(NamedList& params, unsigned int index)
 		params.setParam(paramRoot + "." + s_tcapProblemCode,String(SS7TCAPError::Result_UnexpectedReturnResult));
 		m_error.setError(SS7TCAPError::Result_UnexpectedReturnResult);
 		setState(OperationPending);
+		return;
 	    }
 	    break;
 	case SS7TCAP::TC_ResultNotLast:
@@ -1595,6 +1664,7 @@ void SS7TCAPComponent::update(NamedList& params, unsigned int index)
 		params.setParam(paramRoot + "." + s_tcapProblemCode,String(SS7TCAPError::Result_UnexpectedReturnResult));
 		m_error.setError(SS7TCAPError::Result_UnexpectedReturnResult);
 		setState(OperationPending);
+		return;
 	    }
 	    else if (m_opClass == SS7TCAP::SuccessOnlyReport)
 		setState(WaitForReject);
@@ -1608,11 +1678,16 @@ void SS7TCAPComponent::update(NamedList& params, unsigned int index)
 		params.setParam(paramRoot + "." + s_tcapProblemCode,String(SS7TCAPError::Error_UnexpectedReturnError));
 		m_error.setError(SS7TCAPError::Error_UnexpectedReturnError);
 		setState(OperationPending);
+		return;
 	    }
 	    break;
 	case SS7TCAP::TC_TimerReset:
 	default:
 	    break;
+    }
+    if (TelEngine::null(params.getParam(paramRoot + "." + s_tcapOpCode))) {
+	params.setParam(paramRoot + "." + s_tcapOpCode,m_opCode);
+	params.setParam(paramRoot + "." + s_tcapOpCodeType,m_opType);
     }
 }
 
@@ -1670,6 +1745,10 @@ void SS7TCAPComponent::fill(unsigned int index, NamedList& fillIn)
 	    fillIn.setParam(paramRoot + s_tcapErrCode,String(m_error.error()));
 	else if (m_type == SS7TCAP::TC_L_Reject || m_type == SS7TCAP::TC_U_Reject || m_type == SS7TCAP::TC_R_Reject)
 	    fillIn.setParam(paramRoot + s_tcapProblemCode,String(m_error.error()));
+    }
+    if (m_type == SS7TCAP::TC_L_Cancel) {
+	fillIn.setParam(paramRoot + s_tcapOpCode,m_opCode);
+	fillIn.setParam(paramRoot + s_tcapOpCodeType,m_opType);
     }
     if (m_type == SS7TCAP::TC_U_Reject || m_type == SS7TCAP::TC_R_Reject || m_type == SS7TCAP::TC_L_Reject)
 	setState(Idle);
@@ -2719,10 +2798,9 @@ void SS7TCAPTransactionANSI::encodeComponents(NamedList& params, DataBlock& data
     int componentCount = params.getIntValue(s_tcapCompCount,0);
     DataBlock compData;
     if (componentCount) {
-	int index = 0;
+	int index = componentCount + 1;
 
-	while (index < componentCount) {
-	    index++;
+	while (--index) {
 	    DataBlock codedComp;
 	    // encode parameters
 	    String compParam;
@@ -4301,10 +4379,9 @@ void SS7TCAPTransactionITU::encodeComponents(NamedList& params, DataBlock& data)
     int componentCount = params.getIntValue(s_tcapCompCount,0);
     DataBlock compData;
     if (componentCount) {
-	int index = 0;
+	int index = componentCount + 1;
 
-	while (index < componentCount) {
-	    index++;
+	while (--index) {
 	    DataBlock codedComp;
 	    // encode parameters
 	    String compParam;

@@ -558,9 +558,21 @@ public:
     /**
      * Append a new child to this XmlParent
      * @param child The child to append
-     * @return XmlNoError if the child was successfully added
+     * @return NoError if the child was successfully added
      */
     virtual XmlSaxParser::Error addChild(XmlChild* child) = 0;
+
+    /**
+     * Append a new child of this XmlParent, release the object on failure
+     * @param child The child to append
+     * @return The child on success, 0 on failure
+     */
+    inline XmlChild* addChildSafe(XmlChild* child) {
+	    XmlSaxParser::Error err = addChild(child);
+	    if (err != XmlSaxParser::NoError)
+		TelEngine::destruct(child);
+	    return child;
+	}
 
     /**
      * Remove a child
@@ -899,6 +911,12 @@ public:
 	{ return static_cast<XmlChild*>(m_list.remove(false)); }
 
     /**
+     * Remove the first XmlElement from list and returns it if completed
+     * @return XmlElement pointer or 0 if no XmlElement is found or the first one is not completed
+     */
+    XmlElement* popElement();
+
+    /**
      * Remove a child. Reset the parent of not deleted xml element
      * @param child The child to remove
      * @param delObj True to delete the object
@@ -1067,6 +1085,7 @@ private:
     XmlElement* m_root;                  // The root element
     XmlFragment m_beforeRoot;            // XML children before root (declaration ...)
     String m_file;                       // The file name used on load
+    XmlFragment m_afterRoot;             // XML children after root (comments, empty text)
 };
 
 
@@ -1093,6 +1112,14 @@ public:
      * @param complete False to build an incomplete element
      */
     XmlElement(const char* name, bool complete = true);
+
+    /**
+     * Constructor. Create a new element with a text child
+     * @param name The name of the element
+     * @param value Element text child value
+     * @param complete False to build an incomplete element
+     */
+    XmlElement(const char* name, const char* value, bool complete = true);
 
     /**
      * Copy constructor
@@ -1286,7 +1313,7 @@ public:
 	const String* auth = 0) const;
 
     /**
-     * Find the first child of this XmlElement
+     * Find the first XmlElement child of this XmlElement
      * @param name Optional name of the child
      * @param ns Optional child namespace
      * @param noPrefix True to compare the tag without namespace prefix, false to
@@ -1299,7 +1326,7 @@ public:
 	{ return XmlFragment::findElement(getChildren().skipNull(),name,ns,noPrefix); }
 
     /**
-     * Finds next child of this XmlElement
+     * Finds next XmlElement child of this XmlElement
      * @param prev Previous child
      * @param name Optional name of the child
      * @param ns Optional child namespace
@@ -1315,6 +1342,27 @@ public:
 	    ObjList* start = getChildren().find(prev);
 	    return start ? XmlFragment::findElement(start->skipNext(),name,ns,noPrefix) : 0;
 	}
+
+    /**
+     * Retrieve a child's text
+     * @param name Name (tag) of the child
+     * @param ns Optional child namespace
+     * @param noPrefix True to compare the tag without namespace prefix, false to
+     *  include namespace prefix when comparing the given tag.
+     *  This parameter is ignored ns is not 0
+     * @return Pointer to child's text, 0 if the child was not found
+     */
+    inline const String* childText(const String& name, const String* ns = 0,
+	bool noPrefix = true) const {
+	    XmlElement* c = findFirstChild(&name,ns,noPrefix);
+	    return c ? &(c->getText()) : 0;
+	}
+
+    /**
+     * Get first XmlChild of this XmlElement
+     * @return The first XmlChild found.
+     */
+     XmlChild* getFirstChild();
 
     /**
      * @return The first XmlText found in this XmlElement children
@@ -1666,6 +1714,11 @@ public:
     virtual XmlText* xmlText()
 	{ return this; }
 
+    /**
+     * Helper method to check if the text held by this XmlText contains only spaces
+     * @return False if the text contains non space characters.
+     */
+    bool onlySpaces();
 private:
     String m_text;                        // The text
 };

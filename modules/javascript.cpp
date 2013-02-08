@@ -24,6 +24,7 @@
 
 #include <yatepbx.h>
 #include <yatescript.h>
+#include <yatexml.h>
 
 using namespace TelEngine;
 namespace { // anonymous
@@ -106,7 +107,7 @@ private:
 class JsGlobal : public NamedString
 {
 public:
-    JsGlobal(const char* scriptName, const char* fileName);
+    JsGlobal(const char* scriptName, const char* fileName, bool relPath = true);
     virtual ~JsGlobal();
     bool fileChanged(const char* fileName) const;
     inline JsParser& parser()
@@ -117,6 +118,7 @@ public:
     static void markUnused();
     static void freeUnused();
     static void initScript(const String& scriptName, const String& fileName);
+    static bool reloadScript(const String& scriptName);
     inline static ObjList& globals()
 	{ return s_globals; }
     inline static void unloadAll()
@@ -210,6 +212,9 @@ public:
 	    XDebug(&__plugin,DebugAll,"JsMessage::~JsMessage() [%p]",this);
 	    if (m_owned)
 		TelEngine::destruct(m_message);
+	    if (Engine::exiting())
+		while (m_handlers.remove(false))
+		    ;
 	}
     virtual NamedList* nativeParams() const
 	{ return m_message; }
@@ -285,6 +290,62 @@ protected:
     bool runNative(ObjList& stack, const ExpOperation& oper, GenObject* context);
 };
 
+class JsXML : public JsObject
+{
+    YCLASS(JsXML,JsObject)
+public:
+    inline JsXML(Mutex* mtx)
+	: JsObject("XML",mtx,true),
+	  m_xml(0)
+	{
+	    XDebug(DebugAll,"JsXML::JsXML() [%p]",this);
+	    params().addParam(new ExpFunction("put"));
+	    params().addParam(new ExpFunction("getOwner"));
+	    params().addParam(new ExpFunction("getParent"));
+	    params().addParam(new ExpFunction("getAttribute"));
+	    params().addParam(new ExpFunction("setAttribute"));
+	    params().addParam(new ExpFunction("addChild"));
+	    params().addParam(new ExpFunction("getChild"));
+	    params().addParam(new ExpFunction("getChildren"));
+	    params().addParam(new ExpFunction("addText"));
+	    params().addParam(new ExpFunction("getText"));
+	    params().addParam(new ExpFunction("getChildText"));
+	    params().addParam(new ExpFunction("xmlText"));
+	}
+    inline JsXML(Mutex* mtx, XmlElement* xml, JsXML* owner = 0)
+	: JsObject("XML",mtx,false),
+	  m_xml(xml), m_owner(owner)
+	{
+	    XDebug(DebugAll,"JsXML::JsXML(%p,%p) [%p]",xml,owner,this);
+	    if (owner) {
+		JsObject* proto = YOBJECT(JsObject,owner->params().getParam(protoName()));
+		if (proto && proto->ref())
+		    params().addParam(new ExpWrapper(proto,protoName()));
+	    }
+	}
+    virtual ~JsXML()
+	{
+	    if (m_owner) {
+		m_xml = 0;
+		m_owner = 0;
+	    }
+	    else
+		TelEngine::destruct(m_xml);
+	}
+    virtual JsObject* runConstructor(ObjList& stack, const ExpOperation& oper, GenObject* context);
+    inline JsXML* owner()
+	{ return m_owner ? (JsXML*)m_owner : this; }
+    inline const XmlElement* element() const
+	{ return m_xml; }
+    static void initialize(ScriptContext* context);
+protected:
+    bool runNative(ObjList& stack, const ExpOperation& oper, GenObject* context);
+private:
+    static XmlElement* getXml(const String* obj, bool take);
+    XmlElement* m_xml;
+    RefPointer<JsXML> m_owner;
+};
+
 class JsChannel : public JsObject
 {
     YCLASS(JsChannel,JsObject)
@@ -333,6 +394,7 @@ private:
 };
 
 static String s_basePath;
+static bool s_allowAbort = false;
 
 UNLOAD_PLUGIN(unloadNow)
 {
@@ -397,10 +459,11 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	    TelEngine::destruct(op);
 	}
 	if (str) {
+	    int limit = s_allowAbort ? DebugFail : DebugGoOn;
 	    if (level > DebugAll)
 		level = DebugAll;
-	    else if (level <= DebugFail)
-		level = DebugGoOn;
+	    else if (level < limit)
+		level = limit;
 	    Debug(&__plugin,level,"%s",str.c_str());
 	}
     }
@@ -715,7 +778,12 @@ bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* c
 	ObjList args;
 	if (extractArgs(stack,oper,context,args) < 2)
 	    return false;
-	ExpFunction* func = YOBJECT(ExpFunction,args[0]);
+	const ExpFunction* func = YOBJECT(ExpFunction,args[0]);
+	if (!func) {
+	    JsFunction* jsf = YOBJECT(JsFunction,args[0]);
+	    if (jsf)
+		func = jsf->getFunc();
+	}
 	if (!func)
 	    return false;
 	ExpOperation* name = static_cast<ExpOperation*>(args[1]);
@@ -1065,6 +1133,265 @@ void JsFile::initialize(ScriptContext* context)
 }
 
 
+bool JsXML::runNative(ObjList& stack, const ExpOperation& oper, GenObject* context)
+{
+    XDebug(&__plugin,DebugAll,"JsXML::runNative '%s'(%ld)",oper.name().c_str(),oper.number());
+    ObjList args;
+    int argc = extractArgs(stack,oper,context,args);
+    if (oper.name() == YSTRING("put")) {
+	if (argc < 2 || argc > 3)
+	    return false;
+	ScriptContext* list = YOBJECT(ScriptContext,static_cast<ExpOperation*>(args[0]));
+	ExpOperation* name = static_cast<ExpOperation*>(args[1]);
+	ExpOperation* text = static_cast<ExpOperation*>(args[2]);
+	if (!name || !list || !m_xml)
+	    return false;
+	NamedList* params = list->nativeParams();
+	if (!params)
+	    params = &list->params();
+	params->clearParam(*name);
+	String txt;
+	if (text && text->valBoolean())
+	    m_xml->toString(txt);
+	if (!text || (text->valInteger() != 1))
+	    params->addParam(new NamedPointer(*name,new XmlElement(*m_xml),txt));
+	else
+	    params->addParam(*name,txt);
+    }
+    else if (oper.name() == YSTRING("getOwner")) {
+	if (argc != 0)
+	    return false;
+	if (m_owner && m_owner->ref())
+	    ExpEvaluator::pushOne(stack,new ExpWrapper(m_owner));
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else if (oper.name() == YSTRING("getParent")) {
+	if (argc != 0)
+	    return false;
+	XmlElement* xml = m_xml ? m_xml->parent() : 0;
+	if (xml)
+	    ExpEvaluator::pushOne(stack,new ExpWrapper(new JsXML(mutex(),xml,owner())));
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else if (oper.name() == YSTRING("getAttribute")) {
+	if (argc != 1)
+	    return false;
+	ExpOperation* name = static_cast<ExpOperation*>(args[0]);
+	if (!name)
+	    return false;
+	const String* attr = 0;
+	if (m_xml)
+	    attr = m_xml->getAttribute(*name);
+	if (attr)
+	    ExpEvaluator::pushOne(stack,new ExpOperation(*attr,name->name()));
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else if (oper.name() == YSTRING("setAttribute")) {
+	if (!m_xml)
+	    return false;
+	if (argc != 2)
+	    return false;
+	ExpOperation* name = static_cast<ExpOperation*>(args[0]);
+	ExpOperation* val = static_cast<ExpOperation*>(args[1]);
+	if (!name || !val)
+	    return false;
+	if (JsParser::isUndefined(*val) || JsParser::isNull(*val))
+	    m_xml->removeAttribute(*name);
+	else
+	    m_xml->setAttribute(*name,*val);
+    }
+    else if (oper.name() == YSTRING("addChild")) {
+	if (argc < 1 || argc > 2)
+	    return false;
+	ExpOperation* name = static_cast<ExpOperation*>(args[0]);
+	ExpOperation* val = static_cast<ExpOperation*>(args[1]);
+	if (!name)
+	    return false;
+	if (!m_xml)
+	    return false;
+	JsArray* jsa = YOBJECT(JsArray,name);
+	if (jsa) {
+	    for (long i = 0; i < jsa->length(); i++) {
+		String n((unsigned int)i);
+		JsXML* x = YOBJECT(JsXML,jsa->getField(stack,n,context));
+		if (x && x->element()) {
+		    XmlElement* xml = new XmlElement(*x->element());
+		    if (XmlSaxParser::NoError != m_xml->addChild(xml)) {
+			TelEngine::destruct(xml);
+			return false;
+		    }
+		}
+	    }
+	    return true;
+	}
+	XmlElement* xml = 0;
+	JsXML* x = YOBJECT(JsXML,name);
+	if (x && x->element())
+	    xml = new XmlElement(*x->element());
+	else
+	    xml = new XmlElement(name->c_str());
+	if (val)
+	    xml->addText(*val);
+	if (XmlSaxParser::NoError == m_xml->addChild(xml))
+	    ExpEvaluator::pushOne(stack,new ExpWrapper(new JsXML(mutex(),xml,owner())));
+	else {
+	    TelEngine::destruct(xml);
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+	}
+    }
+    else if (oper.name() == YSTRING("getChild")) {
+	if (argc > 2)
+	    return false;
+	XmlElement* xml = 0;
+	if (m_xml)
+	    xml = m_xml->findFirstChild(static_cast<ExpOperation*>(args[0]),static_cast<ExpOperation*>(args[1]));
+	if (xml)
+	    ExpEvaluator::pushOne(stack,new ExpWrapper(new JsXML(mutex(),xml,owner())));
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else if (oper.name() == YSTRING("getChildren")) {
+	if (argc > 2)
+	    return false;
+	ExpOperation* name = static_cast<ExpOperation*>(args[0]);
+	ExpOperation* ns = static_cast<ExpOperation*>(args[1]);
+	XmlElement* xml = 0;
+	if (m_xml)
+	    xml = m_xml->findFirstChild(name,ns);
+	if (xml) {
+	    JsArray* jsa = new JsArray(mutex());
+	    while (xml) {
+		jsa->push(new ExpWrapper(new JsXML(mutex(),xml,owner())));
+		xml = m_xml->findNextChild(xml,name,ns);
+	    }
+	    ExpEvaluator::pushOne(stack,new ExpWrapper(jsa,"children"));
+	}
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else if (oper.name() == YSTRING("addText")) {
+	if (argc != 1)
+	    return false;
+	ExpOperation* text = static_cast<ExpOperation*>(args[0]);
+	if (!m_xml || !text)
+	    return false;
+	if (!TelEngine::null(text))
+	    m_xml->addText(*text);
+    }
+    else if (oper.name() == YSTRING("getText")) {
+	if (argc)
+	    return false;
+	if (m_xml)
+	    ExpEvaluator::pushOne(stack,new ExpOperation(m_xml->getText(),m_xml->unprefixedTag()));
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else if (oper.name() == YSTRING("getChildText")) {
+	if (argc > 2)
+	    return false;
+	XmlElement* xml = 0;
+	if (m_xml)
+	    xml = m_xml->findFirstChild(static_cast<ExpOperation*>(args[0]),static_cast<ExpOperation*>(args[1]));
+	if (xml)
+	    ExpEvaluator::pushOne(stack,new ExpOperation(xml->getText(),xml->unprefixedTag()));
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else if (oper.name() == YSTRING("xmlText")) {
+	if (argc)
+	    return false;
+	if (m_xml) {
+	    ExpOperation* op = new ExpOperation("",m_xml->unprefixedTag());
+	    m_xml->toString(*op);
+	    ExpEvaluator::pushOne(stack,op);
+	}
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else
+	return JsObject::runNative(stack,oper,context);
+    return true;
+}
+
+JsObject* JsXML::runConstructor(ObjList& stack, const ExpOperation& oper, GenObject* context)
+{
+    XDebug(&__plugin,DebugAll,"JsXML::runConstructor '%s'(%ld) [%p]",oper.name().c_str(),oper.number(),this);
+    JsXML* obj = 0;
+    ObjList args;
+    switch (extractArgs(stack,oper,context,args)) {
+	case 1:
+	    {
+		ExpOperation* text = static_cast<ExpOperation*>(args[0]);
+		XmlElement* xml = getXml(text,false);
+		if (!xml)
+		    return 0;
+		obj = new JsXML(mutex(),xml);
+	    }
+	    break;
+	case 2:
+	    {
+		JsObject* jso = YOBJECT(JsObject,args[0]);
+		ExpOperation* name = static_cast<ExpOperation*>(args[1]);
+		if (!jso || !name)
+		    return 0;
+		XmlElement* xml = getXml(jso->getField(stack,*name,context),false);
+		if (!xml)
+		    return 0;
+		obj = new JsXML(mutex(),xml);
+	    }
+	    break;
+	default:
+	    return 0;
+    }
+    if (!obj)
+	return 0;
+    if (!ref()) {
+	TelEngine::destruct(obj);
+	return 0;
+    }
+    obj->params().addParam(new ExpWrapper(this,protoName()));
+    return obj;
+}
+
+XmlElement* JsXML::getXml(const String* obj, bool take)
+{
+    if (!obj)
+	return 0;
+    XmlElement* xml = 0;
+    NamedPointer* nptr = YOBJECT(NamedPointer,obj);
+    if (nptr) {
+	xml = YOBJECT(XmlElement,nptr);
+	if (xml) {
+	    if (take) {
+		nptr->takeData();
+		return xml;
+	    }
+	    return new XmlElement(*xml);
+	}
+    }
+    XmlDomParser parser;
+    if (!(parser.parse(obj->c_str()) || parser.completeText()))
+	return 0;
+    if (!(parser.document() && parser.document()->root(true)))
+	return 0;
+    return new XmlElement(*parser.document()->root());
+}
+
+void JsXML::initialize(ScriptContext* context)
+{
+    if (!context)
+	return;
+    Mutex* mtx = context->mutex();
+    Lock mylock(mtx);
+    NamedList& params = context->params();
+    if (!params.getParam(YSTRING("XML")))
+	addConstructor(params,"XML",new JsXML(mtx));
+}
+
+
 bool JsChannel::runNative(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {
     XDebug(&__plugin,DebugAll,"JsChannel::runNative '%s'(%ld)",oper.name().c_str(),oper.number());
@@ -1303,6 +1630,7 @@ bool JsAssist::init()
     JsChannel::initialize(ctx,this);
     JsMessage::initialize(ctx);
     JsFile::initialize(ctx);
+    JsXML::initialize(ctx);
     if (ScriptRun::Invalid == m_runner->reset())
 	return false;
     ScriptContext* chan = YOBJECT(ScriptContext,ctx->getField(m_runner->stack(),YSTRING("Channel"),m_runner));
@@ -1511,12 +1839,13 @@ bool JsAssist::msgDisconnect(Message& msg, const String& reason)
 
 ObjList JsGlobal::s_globals;
 
-JsGlobal::JsGlobal(const char* scriptName, const char* fileName)
+JsGlobal::JsGlobal(const char* scriptName, const char* fileName, bool relPath)
     : NamedString(scriptName,fileName),
       m_fileTime(0), m_inUse(true)
 {
     m_jsCode.basePath(s_basePath);
-    m_jsCode.adjustPath(*this);
+    if (relPath)
+	m_jsCode.adjustPath(*this);
     DDebug(&__plugin,DebugAll,"Loading global Javascript '%s' from '%s'",name().c_str(),c_str());
     File::getFileTime(c_str(),m_fileTime);
     if (m_jsCode.parseFile(*this))
@@ -1562,21 +1891,29 @@ void JsGlobal::markUnused()
 
 void JsGlobal::freeUnused()
 {
+    Lock mylock(__plugin);
     ListIterator iter(s_globals);
     while (JsGlobal* script = static_cast<JsGlobal*>(iter.get()))
-	if (!script->m_inUse)
-	    s_globals.remove(script);
+	if (!script->m_inUse) {
+	    s_globals.remove(script,false);
+	    mylock.drop();
+	    TelEngine::destruct(script);
+	    mylock.acquire(__plugin);
+	}
 }
 
 void JsGlobal::initScript(const String& scriptName, const String& fileName)
 {
     if (fileName.null())
 	return;
+    Lock mylock(__plugin);
     JsGlobal* script = static_cast<JsGlobal*>(s_globals[scriptName]);
     if (script) {
 	if (script->fileChanged(fileName)) {
 	    s_globals.remove(script,false);
+	    mylock.drop();
 	    TelEngine::destruct(script);
+	    mylock.acquire(__plugin);
 	}
 	else {
 	    script->m_inUse = true;
@@ -1584,8 +1921,30 @@ void JsGlobal::initScript(const String& scriptName, const String& fileName)
 	}
     }
     script = new JsGlobal(scriptName,fileName);
-    script->runMain();
     s_globals.append(script);
+    mylock.drop();
+    script->runMain();
+}
+
+bool JsGlobal::reloadScript(const String& scriptName)
+{
+    if (scriptName.null())
+	return false;
+    Lock mylock(__plugin);
+    JsGlobal* script = static_cast<JsGlobal*>(s_globals[scriptName]);
+    if (!script)
+	return false;
+    String fileName = *script;
+    if (fileName.null())
+	return false;
+    s_globals.remove(script,false);
+    mylock.drop();
+    TelEngine::destruct(script);
+    mylock.acquire(__plugin);
+    script = new JsGlobal(scriptName,fileName,false);
+    s_globals.append(script);
+    mylock.drop();
+    return script->runMain();
 }
 
 bool JsGlobal::runMain()
@@ -1599,6 +1958,7 @@ bool JsGlobal::runMain()
     JsEngine::initialize(runner->context());
     JsMessage::initialize(runner->context());
     JsFile::initialize(runner->context());
+    JsXML::initialize(runner->context());
     ScriptRun::Status st = runner->run();
     TelEngine::destruct(runner);
     return (ScriptRun::Succeeded == st);
@@ -1608,10 +1968,11 @@ bool JsGlobal::runMain()
 static const char* s_cmds[] = {
     "info",
     "eval",
+    "reload",
     0
 };
 
-static const char* s_cmdsLine = "  javascript {info|eval instructions...}";
+static const char* s_cmdsLine = "  javascript {info|eval instructions...|reload script}";
 
 
 JsModule::JsModule()
@@ -1652,6 +2013,9 @@ bool JsModule::commandExecute(String& retVal, const String& line)
 	return true;
     }
 
+    if (cmd.startSkip("reload") && cmd.trimSpaces())
+	return JsGlobal::reloadScript(cmd);
+
     if (!(cmd.startSkip("eval") && cmd.trimSpaces()))
 	return false;
 
@@ -1666,6 +2030,7 @@ bool JsModule::commandExecute(String& retVal, const String& line)
     JsEngine::initialize(runner->context());
     JsMessage::initialize(runner->context());
     JsFile::initialize(runner->context());
+    JsXML::initialize(runner->context());
     ScriptRun::Status st = runner->run();
     if (st == ScriptRun::Succeeded) {
 	while (ExpOperation* op = ExpEvaluator::popOne(runner->stack())) {
@@ -1688,6 +2053,16 @@ bool JsModule::commandComplete(Message& msg, const String& partLine, const Strin
     else if (partLine == name()) {
 	for (const char** list = s_cmds; *list; list++)
 	    itemComplete(msg.retValue(),*list,partWord);
+	return true;
+    }
+    else if (partLine == YSTRING("javascript reload")) {
+	lock();
+	ListIterator iter(JsGlobal::globals());
+	while (JsGlobal* script = static_cast<JsGlobal*>(iter.get())) {
+	    if (!script->name().null())
+		itemComplete(msg.retValue(),script->name(),partWord);
+	}
+	unlock();
 	return true;
     }
     return Module::commandComplete(msg,partLine,partWord);
@@ -1811,6 +2186,7 @@ void JsModule::initialize()
     if (!tmp.endsWith(Engine::pathSeparator()))
 	tmp += Engine::pathSeparator();
     s_basePath = tmp;
+    s_allowAbort = cfg.getBoolValue("general","allow_abort");
     lock();
     m_assistCode.clear();
     m_assistCode.basePath(tmp);
@@ -1820,8 +2196,8 @@ void JsModule::initialize()
 	Debug(this,DebugInfo,"Parsed routing script: %s",tmp.c_str());
     else if (tmp)
 	Debug(this,DebugWarn,"Failed to parse script: %s",tmp.c_str());
-    unlock();
     JsGlobal::markUnused();
+    unlock();
     NamedList* sect = cfg.getSection("scripts");
     if (sect) {
 	unsigned int len = sect->length();

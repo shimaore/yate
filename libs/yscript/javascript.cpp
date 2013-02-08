@@ -184,7 +184,7 @@ private:
     bool jumpRelative(long int offset, GenObject* context) const;
     bool jumpAbsolute(long int index, GenObject* context) const;
     bool callFunction(ObjList& stack, const ExpOperation& oper, GenObject* context,
-	JsFunction* func, bool constr) const;
+	JsFunction* func, bool constr, JsObject* thisObj = 0) const;
     bool callFunction(ObjList& stack, const ExpOperation& oper, GenObject* context,
 	long int retIndex, JsFunction* func, ObjList& args,
 	JsObject* thisObj, JsObject* scopeObj) const;
@@ -345,6 +345,23 @@ static const TokenDict s_preProc[] =
 };
 #undef MAKEOP
 
+#define MAKEOP(o) { "[" #o "]", JsCode::Opc ## o }
+static const TokenDict s_internals[] =
+{
+    MAKEOP(Label),
+    MAKEOP(Begin),
+    MAKEOP(End),
+    MAKEOP(Flush),
+    MAKEOP(Jump),
+    MAKEOP(JumpTrue),
+    MAKEOP(JumpFalse),
+    MAKEOP(JRel),
+    MAKEOP(JRelTrue),
+    MAKEOP(JRelFalse),
+    { 0, 0 }
+};
+#undef MAKEOP
+
 static const ExpNull s_null;
 
 
@@ -353,7 +370,7 @@ GenObject* JsContext::resolveTop(ObjList& stack, const String& name, GenObject* 
     XDebug(DebugAll,"JsContext::resolveTop '%s'",name.c_str());
     for (ObjList* l = stack.skipNull(); l; l = l->skipNext()) {
 	JsObject* jso = YOBJECT(JsObject,l->get());
-	if (jso && jso->hasField(stack,name,context))
+	if (jso && jso->toString() == YSTRING("()") && jso->hasField(stack,name,context))
 	    return jso;
     }
     return this;
@@ -886,12 +903,8 @@ bool JsCode::getOneInstruction(const char*& expr, GenObject* nested)
 	if (!getInstruction(expr,0,nested))
 	    return false;
     }
-    else {
-	if (!runCompile(expr,';',nested))
-	    return false;
-	if (skipComments(expr) == ';')
-	    expr++;
-    }
+    else if (!runCompile(expr,";}",nested))
+	return false;
     return true;
 }
 
@@ -923,6 +936,7 @@ bool JsCode::getInstruction(const char*& expr, char stop, GenObject* nested)
 	return true;
     }
     const char* saved = expr;
+    unsigned int savedLine = m_lineNo;
     Opcode op = ExpEvaluator::getOperator(expr,s_instr);
     switch ((JsOpcode)op) {
 	case (JsOpcode)OpcNone:
@@ -949,6 +963,7 @@ bool JsCode::getInstruction(const char*& expr, char stop, GenObject* nested)
 	    return parseIf(expr,nested);
 	case OpcElse:
 	    expr = saved;
+	    m_lineNo = savedLine;
 	    return false;
 	case OpcSwitch:
 	    return parseSwitch(expr,nested);
@@ -957,32 +972,38 @@ bool JsCode::getInstruction(const char*& expr, char stop, GenObject* nested)
 	case OpcWhile:
 	    return parseWhile(expr,nested);
 	case OpcCase:
-	    if (!ParseNested::parseInner(nested,OpcCase,expr))
+	    if (!ParseNested::parseInner(nested,OpcCase,expr)) {
+		m_lineNo = savedLine;
 		return gotError("case not inside switch",saved);
+	    }
 	    if (skipComments(expr) != ':')
 		return gotError("Expecting ':'",expr);
 	    expr++;
 	    break;
 	case OpcDefault:
-	    if (!ParseNested::parseInner(nested,OpcDefault,expr))
+	    if (!ParseNested::parseInner(nested,OpcDefault,expr)) {
+		m_lineNo = savedLine;
 		return gotError("Unexpected default instruction",saved);
+	    }
 	    if (skipComments(expr) != ':')
 		return gotError("Expecting ':'",expr);
 	    expr++;
 	    break;
 	case OpcBreak:
-	    if (!ParseNested::parseInner(nested,OpcBreak,expr))
+	    if (!ParseNested::parseInner(nested,OpcBreak,expr)) {
+		m_lineNo = savedLine;
 		return gotError("Unexpected break instruction",saved);
+	    }
 	    if (skipComments(expr) != ';')
 		return gotError("Expecting ';'",expr);
-	    expr++;
 	    break;
 	case OpcCont:
-	    if (!ParseNested::parseInner(nested,OpcCont,expr))
+	    if (!ParseNested::parseInner(nested,OpcCont,expr)) {
+		m_lineNo = savedLine;
 		return gotError("Unexpected continue instruction",saved);
+	    }
 	    if (skipComments(expr) != ';')
 		return gotError("Expecting ';'",expr);
-	    expr++;
 	    break;
 	case OpcVar:
 	    return parseVar(expr);
@@ -1108,10 +1129,13 @@ bool JsCode::parseIf(const char*& expr, GenObject* nested)
 	return gotError("Expecting ')'",expr);
     ExpOperation* cond = addOpcode((Opcode)OpcJumpFalse,++m_label);
     expr++;
-    if (!getOneInstruction(++expr,nested))
+    if (!getOneInstruction(expr,nested))
 	return false;
-    const char* save = expr;
     skipComments(expr);
+    const char* save = expr;
+    unsigned int savedLine = m_lineNo;
+    if (*expr == ';')
+	skipComments(++expr);
     if ((JsOpcode)ExpEvaluator::getOperator(expr,s_instr) == OpcElse) {
 	ExpOperation* jump = addOpcode((Opcode)OpcJump,++m_label);
 	addOpcode(OpcLabel,cond->number());
@@ -1121,6 +1145,7 @@ bool JsCode::parseIf(const char*& expr, GenObject* nested)
     }
     else {
 	expr = save;
+	m_lineNo = savedLine;
 	addOpcode(OpcLabel,cond->number());
     }
     return true;
@@ -1272,7 +1297,7 @@ bool JsCode::parseTry(const char*& expr, GenObject* nested)
 {
     addOpcode((Opcode)OpcTry);
     ParseNested parseStack(this,nested,OpcTry);
-    if (!runCompile(expr,0,parseStack))
+    if (!runCompile(expr,(const char*)0,parseStack))
 	return false;
     skipComments(expr);
     if ((JsOpcode)ExpEvaluator::getOperator(expr,s_instr) == OpcCatch) {
@@ -1392,17 +1417,21 @@ ExpEvaluator::Opcode JsCode::getPostfixOperator(const char*& expr)
 
 const char* JsCode::getOperator(Opcode oper) const
 {
-    if (oper < OpcPrivate)
-	return ExpEvaluator::getOperator(oper);
     if ((int)oper == (int)OpcIndex)
 	return "[]";
-    const char* tmp = lookup(oper,s_operators);
+    const char* tmp = ExpEvaluator::getOperator(oper);
     if (!tmp) {
-	tmp = lookup(oper,s_unaryOps);
+	tmp = lookup(oper,s_operators);
 	if (!tmp) {
-	    tmp = lookup(oper,s_postfixOps);
-	    if (!tmp)
-		tmp = lookup(oper,s_instr);
+	    tmp = lookup(oper,s_unaryOps);
+	    if (!tmp) {
+		tmp = lookup(oper,s_postfixOps);
+		if (!tmp) {
+		    tmp = lookup(oper,s_instr);
+		    if (!tmp)
+			tmp = lookup(oper,s_internals);
+		}
+	    }
 	}
     }
     return tmp;
@@ -1445,6 +1474,7 @@ bool JsCode::getSimple(const char*& expr, bool constOnly)
     XDebug(this,DebugAll,"JsCode::getSimple(%s) '%.30s'",String::boolText(constOnly),expr);
     skipComments(expr);
     const char* save = expr;
+    unsigned int savedLine = m_lineNo;
     switch ((JsOpcode)ExpEvaluator::getOperator(expr,s_constants)) {
 	case OpcFalse:
 	    addOpcode(false);
@@ -1461,6 +1491,7 @@ bool JsCode::getSimple(const char*& expr, bool constOnly)
 	case OpcFuncDef:
 	    if (constOnly) {
 		expr = save;
+		m_lineNo = savedLine;
 		return false;
 	    }
 	    return parseFuncDef(expr,false);
@@ -1762,16 +1793,41 @@ bool JsCode::runOperation(ObjList& stack, const ExpOperation& oper, GenObject* c
 	case OpcReturn:
 	    {
 		ExpOperation* op = popValue(stack,context);
+		ExpOperation* thisObj = 0;
 		bool ok = false;
 		while (ExpOperation* drop = popAny(stack)) {
-		    ok = drop->opcode() == OpcFunc;
+		    ok = drop->barrier() && (drop->opcode() == OpcFunc);
 		    long int lbl = drop->number();
+		    if (ok && (lbl < -1)) {
+			lbl = -lbl;
+			XDebug(this,DebugInfo,"Returning this=%p from constructor '%s'",
+			    thisObj,drop->name().c_str());
+			if (thisObj) {
+			    TelEngine::destruct(op);
+			    op = thisObj;
+			    thisObj = 0;
+			}
+		    }
+		    if (drop->opcode() == OpcPush) {
+			ExpWrapper* wrap = YOBJECT(ExpWrapper,drop);
+			if (wrap && wrap->name() == YSTRING("()")) {
+			    JsObject* jso = YOBJECT(JsObject,wrap->object());
+			    if (jso) {
+				wrap = YOBJECT(ExpWrapper,jso->params().getParam(YSTRING("this")));
+				if (wrap) {
+				    TelEngine::destruct(thisObj);
+				    thisObj = wrap->clone(wrap->name());
+				}
+			    }
+			}
+		    }
 		    TelEngine::destruct(drop);
 		    if (ok) {
 			ok = jumpAbsolute(lbl,context);
 			break;
 		    }
 		}
+		TelEngine::destruct(thisObj);
 		if (!ok) {
 		    TelEngine::destruct(op);
 		    return gotError("Return outside function call",oper.lineNumber());
@@ -1783,8 +1839,15 @@ bool JsCode::runOperation(ObjList& stack, const ExpOperation& oper, GenObject* c
 	case OpcIn:
 	case OpcOf:
 	    {
-		ExpOperation* obj = popValue(stack,context);
+		ExpOperation* obj = popOne(stack);
 		ExpOperation* fld = popOne(stack);
+		String name;
+		if (obj && obj->opcode() == OpcField) {
+		    name = obj->name();
+		    bool ok = runField(stack,*obj,context);
+		    TelEngine::destruct(obj);
+		    obj = ok ? popOne(stack) : 0;
+		}
 		if (!fld || !obj) {
 		    TelEngine::destruct(fld);
 		    TelEngine::destruct(obj);
@@ -1808,7 +1871,7 @@ bool JsCode::runOperation(ObjList& stack, const ExpOperation& oper, GenObject* c
 		ExpWrapper* wrap = 0;
 		if (iter) {
 		    if (isOf)
-			iter->name(obj->name());
+			iter->name(name ? name : obj->name());
 		    wrap = new ExpWrapper(iter);
 #ifdef DEBUG
 		    *wrap << fld->name() << (isOf ? " of " : " in ") << obj->name();
@@ -2067,12 +2130,14 @@ bool JsCode::jumpAbsolute(long int index, GenObject* context) const
     return true;
 }
 
-bool JsCode::callFunction(ObjList& stack, const ExpOperation& oper, GenObject* context, JsFunction* func, bool constr) const
+bool JsCode::callFunction(ObjList& stack, const ExpOperation& oper, GenObject* context,
+    JsFunction* func, bool constr, JsObject* thisObj) const
 {
     if (!(func && context))
 	return false;
-    XDebug(this,DebugInfo,"JsCode::callFunction(%p,%lu,%p) in %s'%s'",
-	&stack,oper.number(),context,(constr ? "constructor " : ""),func->toString().c_str());
+    XDebug(this,DebugInfo,"JsCode::callFunction(%p,%lu,%p) in %s'%s' this=%p",
+	&stack,oper.number(),context,(constr ? "constructor " : ""),
+	func->toString().c_str(),thisObj);
     JsRunner* runner = static_cast<JsRunner*>(context);
     long int index = runner->m_index;
     if (!m_linked.length()) {
@@ -2092,8 +2157,13 @@ bool JsCode::callFunction(ObjList& stack, const ExpOperation& oper, GenObject* c
 	Debug(this,DebugWarn,"Oops! Could not find return point!");
 	return false;
     }
-    ExpOperation* op = constr ? popOne(stack) : 0;
-    JsObject* thisObj = YOBJECT(JsObject,op);
+    ExpOperation* op = 0;
+    if (constr) {
+	index = -index;
+	op = popOne(stack);
+	if (op && !thisObj)
+	    thisObj = YOBJECT(JsObject,op);
+    }
     if (thisObj && !thisObj->ref())
 	thisObj = 0;
     TelEngine::destruct(op);
@@ -2106,7 +2176,7 @@ bool JsCode::callFunction(ObjList& stack, const ExpOperation& oper, GenObject* c
 	long int retIndex, JsFunction* func, ObjList& args,
 	JsObject* thisObj, JsObject* scopeObj) const
 {
-    pushOne(stack,new ExpOperation(OpcFunc,0,retIndex,true));
+    pushOne(stack,new ExpOperation(OpcFunc,oper.name(),retIndex,true));
     if (scopeObj)
 	pushOne(stack,new ExpWrapper(scopeObj,"()"));
     JsObject* ctxt = JsObject::buildCallContext(func->mutex(),thisObj);
@@ -2229,21 +2299,23 @@ bool JsRunner::callable(const String& name)
 
 JsFunction::JsFunction(Mutex* mtx)
     : JsObject("Function",mtx,true),
-      m_label(0), m_code(0)
+      m_label(0), m_code(0), m_func("")
 {
     init();
 }
 
 JsFunction::JsFunction(Mutex* mtx, const char* name, ObjList* args, long int lbl, ScriptCode* code)
-    : JsObject(mtx,String("[function ") + name + "()]",true),
-      m_label(lbl), m_code(code)
+    : JsObject(mtx,String("[function ") + name + "()]",false),
+      m_label(lbl), m_code(code), m_func(name)
 {
     init();
     if (args) {
 	while (GenObject* arg = args->remove(false))
 	    m_formal.append(arg);
     }
-    params().addParam("length",String(m_formal.count()));
+    unsigned int argc = m_formal.count();
+    static_cast<ExpOperation&>(m_func) = argc;
+    params().addParam("length",String(argc));
 }
 
 JsObject* JsFunction::copy(Mutex* mtx) const
@@ -2281,21 +2353,30 @@ bool JsFunction::runNative(ObjList& stack, const ExpOperation& oper, GenObject* 
     return true;
 }
 
-bool JsFunction::runDefined(ObjList& stack, const ExpOperation& oper, GenObject* context)
+bool JsFunction::runDefined(ObjList& stack, const ExpOperation& oper, GenObject* context, JsObject* thisObj)
 {
-    XDebug(DebugAll,"JsFunction::runDefined() in '%s' [%p]",toString().c_str(),this);
+    XDebug(DebugAll,"JsFunction::runDefined() in '%s' this=%p [%p]",
+	toString().c_str(),thisObj,this);
+    JsObject* newObj = 0;
     JsObject* proto = YOBJECT(JsObject,getField(stack,"prototype",context));
     if (proto) {
 	// found prototype, build object
-	JsObject* obj = proto->runConstructor(stack,oper,context);
-	if (!obj)
+	newObj = proto->runConstructor(stack,oper,context);
+	if (!newObj)
 	    return false;
-	ExpEvaluator::pushOne(stack,new ExpWrapper(obj,oper.name()));
+	ExpEvaluator::pushOne(stack,new ExpWrapper(newObj,oper.name()));
+	thisObj = newObj;
     }
     JsCode* code = YOBJECT(JsCode,m_code);
-    XDebug(DebugAll,"JsFunction::runDefined code=%p proto=%p [%p]",code,proto,this);
-    if (code)
-	return code->callFunction(stack,oper,context,this,(proto != 0));
+    XDebug(DebugAll,"JsFunction::runDefined code=%p proto=%p %s=%p [%p]",
+	code,proto,(newObj ? "new" : "this"),thisObj,this);
+    if (code) {
+	if (!code->callFunction(stack,oper,context,this,(proto != 0),thisObj))
+	    return false;
+	if (newObj && newObj->ref())
+	    ExpEvaluator::pushOne(stack,new ExpWrapper(newObj,oper.name()));
+	return true;
+    }
     return proto || runNative(stack,oper,context);
 }
 
@@ -2338,6 +2419,7 @@ bool JsParser::parse(const char* text, bool fragment)
 {
     if (TelEngine::null(text))
 	return false;
+    String::stripBOM(text);
     if (fragment)
 	return code() && static_cast<JsCode*>(code())->compile(text,this);
     JsCode* code = new JsCode;

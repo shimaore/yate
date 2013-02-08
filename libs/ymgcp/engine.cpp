@@ -41,6 +41,7 @@ public:
     virtual void run();
 private:
     MGCPEngine* m_engine;
+    SocketAddr m_addr;
     Action m_action;
 };
 
@@ -67,6 +68,7 @@ MGCPPrivateThread::MGCPPrivateThread(MGCPEngine* engine, bool process,
 	Thread::Priority priority)
     : Thread(process?"MGCP Process":"MGCP Receive",priority),
     m_engine(engine),
+    m_addr(AF_INET),
     m_action(process?Process:Receive)
 {
     DDebug(m_engine,DebugInfo,"MGCPPrivateThread::MGCPPrivateThread() [%p]",this);
@@ -91,7 +93,7 @@ void MGCPPrivateThread::run()
 	    m_engine->runProcess();
 	    break;
 	case Receive:
-	    m_engine->runReceive();
+	    m_engine->runReceive(m_addr);
 	    break;
     }
 }
@@ -316,7 +318,8 @@ unsigned int MGCPEngine::getNextId()
 
 // Send a command message. Create a transaction for it.
 // Fail if the message is not a valid one or isn't a valid command
-MGCPTransaction* MGCPEngine::sendCommand(MGCPMessage* cmd, const SocketAddr& addr)
+MGCPTransaction* MGCPEngine::sendCommand(MGCPMessage* cmd, const SocketAddr& addr,
+    bool engineProcess)
 {
     if (!cmd)
 	return 0;
@@ -328,7 +331,7 @@ MGCPTransaction* MGCPEngine::sendCommand(MGCPMessage* cmd, const SocketAddr& add
     }
 
     Lock lock(this);
-    return new MGCPTransaction(this,cmd,true,addr);
+    return new MGCPTransaction(this,cmd,true,addr,engineProcess);
 }
 
 // Read data from the socket. Parse and process the received message
@@ -453,10 +456,23 @@ bool MGCPEngine::process(u_int64_t time)
     return true;
 }
 
-// Repeatedly calls receive() until the calling thread terminates
-void MGCPEngine::runReceive()
+// Try to get an event from a given transaction.
+// If the event contains an unknown command and this engine is not allowed
+//  to process such commands, calls the returnEvent() method, otherwise,
+//  calls the processEvent() method
+bool MGCPEngine::processTransaction(MGCPTransaction* tr, u_int64_t time)
 {
-    SocketAddr addr(AF_INET);
+    MGCPEvent* event = tr ? tr->getEvent(time) : 0;
+    if (!event)
+	return false;
+    if (!processEvent(event))
+	returnEvent(event);
+    return true;
+}
+
+// Repeatedly calls receive() until the calling thread terminates
+void MGCPEngine::runReceive(SocketAddr& addr)
+{
     if (m_recvBuf)
 	delete[] m_recvBuf;
     m_recvBuf = new unsigned char[maxRecvPacket()];
@@ -466,6 +482,13 @@ void MGCPEngine::runReceive()
 	    Thread::idle(true);
 	else
 	    Thread::check(true);
+}
+
+// Repeatedly calls receive() until the calling thread terminates
+void MGCPEngine::runReceive()
+{
+    SocketAddr addr(AF_INET);
+    runReceive(addr);
 }
 
 // Repeatedly calls process() until the calling thread terminates
@@ -491,6 +514,8 @@ MGCPEvent* MGCPEngine::getEvent(u_int64_t time)
 	    m_iterator.assign(m_transactions);
 	    break;
 	}
+	if (!tr->m_engineProcess)
+	    continue;
 	RefPointer<MGCPTransaction> sref = tr;
 	if (!sref)
 	    continue;
@@ -553,7 +578,7 @@ void MGCPEngine::cleanup(bool gracefully, const char* text)
 	String::boolText(gracefully),text);
 
     // Terminate transactions
-    lock();
+    Lock mylock(this);
     if (gracefully)
 	for (ObjList* o = m_transactions.skipNull(); o; o = o->skipNext()) {
 	    MGCPTransaction* tr = static_cast<MGCPTransaction*>(o->get());
@@ -561,7 +586,6 @@ void MGCPEngine::cleanup(bool gracefully, const char* text)
 		tr->setResponse(400,text);
 	}
     m_transactions.clear();
-    unlock();
 
     // Check if we have any private threads to wait
     if (!m_threads.skipNull())
@@ -569,14 +593,20 @@ void MGCPEngine::cleanup(bool gracefully, const char* text)
 
     // Terminate private threads
     Debug(this,DebugAll,"Terminating %u private threads",m_threads.count());
-    lock();
     ListIterator iter(m_threads);
     for (GenObject* o = 0; 0 != (o = iter.get());)
 	static_cast<MGCPPrivateThread*>(o)->cancel(!gracefully);
-    unlock();
     DDebug(this,DebugAll,"Waiting for private threads to terminate");
-    while (m_threads.skipNull())
-	Thread::yield();
+    u_int64_t maxWait = Time::now() + 2000000;
+    while (m_threads.skipNull()) {
+	mylock.drop();
+	if (Time::now() > maxWait) {
+	    Debug(this,DebugGoOn,"Private threads did not terminate!");
+	    return;
+	}
+	Thread::idle();
+	mylock.acquire(this);
+    }
     DDebug(this,DebugAll,"Private threads terminated");
 }
 
@@ -630,7 +660,7 @@ void MGCPEngine::appendThread(MGCPPrivateThread* thread)
     if (!thread)
 	return;
     Lock lock(this);
-    m_threads.append(thread);
+    m_threads.append(thread)->setDelete(false);
     XDebug(this,DebugAll,"Added private thread (%p)",thread);
 }
 

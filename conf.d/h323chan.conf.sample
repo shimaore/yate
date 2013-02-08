@@ -28,8 +28,35 @@
 ; needmedia: bool: Drop calls for which no common media could be negotiated
 ;needmedia=yes
 
-; dtmfinband: bool: Send keypad events as inband DTMF
-;dtmfinband=no
+; dtmfmethods: string: Comma separated list of methods used to send DTMFs
+; Allowed values in list:
+;  h323: Use library send user input method
+;  rfc2833: Use RFC 2833 signals if remote party advertised support
+;  inband: Send tones in audio stream
+; The methods will be used in the listed order
+; Defaults to 'rfc2833,h323,inband' if missing or empty
+; Invalid values are ignored
+; E.g.
+;   'h323,foo' leads to 'h323'
+;   'foo,foo1' leads to 'rfc2833,h323,inband'
+; This parameter can be overridden from routing by 'odtmfmethods' for outgoing call leg
+;  and 'idtmfmethods' for incoming call leg
+; Also, this parameter can be overridden in chan.dtmf messages by a 'methods' parameter
+; NOTE:
+;   When overridden from chan.dtmf an empty or invalid 'methods' parameter will be ignored
+;   Methods indicated in chan.dtmf message will be intersected with channel capabilities
+;    unless an explicit boolean true 'methods_override' parameter is present
+; This parameter is applied on reload for new calls only
+;dtmfmethods=rfc2833,h323,inband
+
+; honor_dtmf_detect: bool: Honor DTMF detected method when sending DTMFs
+; If enabled the channel will try to send a DTMF using the same method as received
+; If the detected method is not enabled it won't be used
+; This parameter can be overridden from routing by 'ohonor_dtmf_detect' for outgoing call leg
+;  and 'ihonor_dtmf_detect' for incoming call leg
+; This parameter is applied on reload for new calls only
+; Defaults to enable
+;honor_dtmf_detect=enable
 
 ; Use an external RTP module instead of the native OpenH323 RTP stack, which is
 ;  very cpu intensive. If no external RTP can be found it will fallback to the
@@ -143,6 +170,18 @@ gw = false
 ; Minimum allowed value is 1, maximum allowed value is 65535
 ; Defaults to 65535
 ;bind_maxport=65535
+
+; timeout_control: integer: Control channel start timeout in msec
+; Valid range 10000 to 600000 (10s to 10m), library default 2m
+;timeout_control=120000
+
+; timeout_answer: integer: Answer timeout (maximum time until CONNECT) in msec
+; Valid range 5000 to 600000 (5s to 10m), library default 1m
+;timeout_answer=60000
+
+; timeout_capabilities: integer: Capability exchange timeout in msec
+; Valid range 1000 to 120000 (1s to 2m), library default 30s
+;timeout_capabilities=30000
 
 ; alias: string: The alias used by h323 module to connect to gatekeeper
 alias = yate

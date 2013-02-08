@@ -501,7 +501,16 @@ protected:
      * @param nested User defined object to pass for nested parsing
      * @return True if one expression was compiled and a separator follows
      */
-    virtual bool runCompile(const char*& expr, char stop = 0, GenObject* nested = 0);
+    bool runCompile(const char*& expr, char stop, GenObject* nested = 0);
+
+    /**
+     * Runs the parser and compiler for one (sub)expression
+     * @param expr Pointer to text to parse, gets advanced
+     * @param stop Optional list of possible characters expected after the expression
+     * @param nested User defined object to pass for nested parsing
+     * @return True if one expression was compiled and a separator follows
+     */
+    virtual bool runCompile(const char*& expr, const char* stop = 0, GenObject* nested = 0);
 
     /**
      * Skip over comments and whitespaces
@@ -954,13 +963,13 @@ public:
 	{ m_number = num; String::operator=((int)num); return num; }
 
     /**
-     * Retrive the numeric value of the operation
+     * Retrieve the numeric value of the operation
      * @return Number contained in operation, zero if not a number
      */
     virtual long int valInteger() const;
 
     /**
-     * Retrive the boolean value of the operation
+     * Retrieve the boolean value of the operation
      * @return True if the operation is to be interpreted as true value
      */
     virtual bool valBoolean() const;
@@ -1012,6 +1021,13 @@ public:
 	{ if (name) (*this) << "[function " << name << "()]"; }
 
     /**
+     * Retrieve the boolean value of the function (not of its result)
+     * @return Always true
+     */
+    virtual bool valBoolean() const
+	{ return true; }
+
+    /**
      * Clone and rename method
      * @param name Name of the cloned operation
      * @return New operation instance
@@ -1060,6 +1076,12 @@ public:
      * @return Pointer to the requested class or NULL if this object doesn't implement it
      */
     virtual void* getObject(const String& name) const;
+
+    /**
+     * Retrieve the boolean value of the operation
+     * @return True if the wrapped object is to be interpreted as true value
+     */
+    virtual bool valBoolean() const;
 
     /**
      * Clone and rename method
@@ -1938,9 +1960,17 @@ public:
      *  and results are pushed back on stack
      * @param oper Function to evaluate
      * @param context Pointer to arbitrary object passed from evaluation methods
+     * @param thisObj Object that should act as "this" for the function call
      * @return True if evaluation succeeded
      */
-    virtual bool runDefined(ObjList& stack, const ExpOperation& oper, GenObject* context);
+    virtual bool runDefined(ObjList& stack, const ExpOperation& oper, GenObject* context, JsObject* thisObj = 0);
+
+    /**
+     * Retrieve the ExpFunction matching this Javascript function
+     * @return Pointer to ExpFunction representation
+     */
+    inline const ExpFunction* getFunc() const
+	{ return &m_func; }
 
     /**
      * Retrieve the name of the N-th formal argument
@@ -1980,6 +2010,7 @@ private:
     ObjList m_formal;
     long int m_label;
     ScriptCode* m_code;
+    ExpFunction m_func;
 };
 
 /**

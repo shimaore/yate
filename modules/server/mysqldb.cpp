@@ -40,9 +40,6 @@
 #define mysql_library_end mysql_server_end
 #endif
 
-#define MIN_CONNECTIONS		1
-#define MAX_CONNECTIONS 	10
-
 using namespace TelEngine;
 namespace { // anonymous
 
@@ -435,7 +432,8 @@ int MyConn::queryDbInternal(DbQuery* query)
 MyAcct::MyAcct(const NamedList* sect)
     : String(*sect),
       Mutex(true,"MySQL::acct"),
-      m_queueSem(MAX_CONNECTIONS,"MySQL::queue"),
+      m_poolSize(sect->getIntValue("poolsize",1,1)),
+      m_queueSem(m_poolSize,"MySQL::queue"),
       m_queueMutex(false,"MySQL::queue"),
       m_totalQueries(0), m_failedQueries(0), m_errorQueries(0),
       m_queryTime(0), m_failedConns(0),
@@ -456,11 +454,6 @@ MyAcct::MyAcct(const NamedList* sect)
     m_compress = sect->getBoolValue("compress");
     m_encoding = sect->getValue("encoding");
 
-    m_poolSize = sect->getIntValue("poolsize",MIN_CONNECTIONS);
-    if (m_poolSize < MIN_CONNECTIONS)
-	m_poolSize = MIN_CONNECTIONS;
-    else if (m_poolSize > MAX_CONNECTIONS)
-	m_poolSize = MAX_CONNECTIONS;
     Debug(&module, DebugNote, "For account '%s' connection pool size is %d",
 	c_str(),m_poolSize);
     
@@ -550,15 +543,13 @@ bool MyAcct::initDb()
     Debug(&module,DebugNote,"Initiating pool of %d connections for '%s'",
 	m_poolSize,c_str());
 
-    m_queueSem.lock();
-
     s_libMutex.lock();
     if (0 == s_libCounter++) {
 	DDebug(&module,DebugAll,"Initializing the MySQL library");
 	mysql_library_init(0,0,0);
     }
     s_libMutex.unlock();
-    
+
     int initCons = initConns();
     if (!initCons) {
 	Debug(&module,DebugWarn,"Could not initiate any connections for account '%s', trying again in %d seconds",
@@ -751,7 +742,7 @@ void InitThread::run()
 	    if (acc->shouldRetryInit() && acc->retryWhen() <= Time::msecNow()) {
 		int count = acc->initConns();
 		if (count < acc->poolSize())
-		    Debug(&module,(count ? DebugMild : DebugWarn),"Account '%s' has %d initialized connections out of "
+		    Debug(&module,(count ? DebugMild : DebugWarn),"Account '%s' has %d initialized connections out of"
 			" a pool of %d",acc->c_str(),count,acc->poolSize());
 		else
 		    Debug(&module,DebugInfo,"All connections for account '%s' have been initialized, pool size is %d",

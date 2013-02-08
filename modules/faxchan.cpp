@@ -806,7 +806,7 @@ bool FaxDriver::msgExecute(Message& msg, String& dest)
     dest = dest.matchString(2);
 
     RefPointer<FaxChan> fc;
-    CallEndpoint* ce = static_cast<CallEndpoint *>(msg.userData());
+    CallEndpoint* ce = YOBJECT(CallEndpoint,msg.userData());
     if (ce) {
 	fc = new FaxChan(true,dest,transmit,msg);
 	fc->initChan();
@@ -825,6 +825,7 @@ bool FaxDriver::msgExecute(Message& msg, String& dest)
 	Message m("call.route");
 	fc->complete(m);
 	fc->setParams(m,fc->guessType(msg),FaxChan::guessT38(msg));
+	m.copyParams(msg,msg[YSTRING("copyparams")]);
 	m.userData(fc);
 	String callto = msg.getValue("caller");
 	if (callto)

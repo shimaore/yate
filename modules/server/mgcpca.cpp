@@ -722,11 +722,18 @@ RefPointer<MGCPMessage> MGCPWrapper::sendSync(MGCPMessage* mm, const SocketAddr&
 	Thread::idle();
     }
     u_int64_t t2 = Time::msecNow();
-    MGCPTransaction* tr = s_engine->sendCommand(mm,address);
+    RefPointer<MGCPTransaction> tr = s_engine->sendCommand(mm,address,false);
+    s_mutex.lock();
     tr->userData(m_this);
     m_tr = tr;
-    while (m_tr == tr)
+    s_mutex.unlock();
+    while (m_tr == tr) {
 	Thread::idle();
+	s_engine->processTransaction(tr);
+    }
+    if (tr)
+	tr->setEngineProcess();
+    tr = 0;
     RefPointer<MGCPMessage> tmp = m_msg;
     m_msg = 0;
     u_int64_t t3 = Time::msecNow();
@@ -1596,8 +1603,11 @@ bool MGCPCircuit::sendAsync(MGCPMessage* mm, bool notify)
     if (ep) {
 	MGCPTransaction* tr = s_engine->sendCommand(mm,ep->address());
 	if (tr) {
-	    if (notify)
+	    if (notify) {
+		s_mutex.lock();
 		tr->userData(m_this);
+		s_mutex.unlock();
+	    }
 	    return true;
 	}
     }
@@ -1623,13 +1633,18 @@ RefPointer<MGCPMessage> MGCPCircuit::sendSync(MGCPMessage* mm)
 	Thread::idle();
     }
     u_int64_t t2 = Time::msecNow();
-    MGCPTransaction* tr = s_engine->sendCommand(mm,ep->address());
+    RefPointer<MGCPTransaction> tr = s_engine->sendCommand(mm,ep->address(),false);
     s_mutex.lock();
     tr->userData(m_this);
     m_tr = tr;
     s_mutex.unlock();
-    while (m_tr == tr)
+    while (m_tr == tr) {
 	Thread::idle();
+	s_engine->processTransaction(tr);
+    }
+    if (tr)
+	tr->setEngineProcess();
+    tr = 0;
     RefPointer<MGCPMessage> tmp = m_msg;
     m_msg = 0;
     u_int64_t t3 = Time::msecNow();

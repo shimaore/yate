@@ -199,6 +199,7 @@ static int s_seq = 0;
 static String s_runId;
 static bool s_cdrUpdates = true;
 static bool s_cdrStatus = false;
+static bool s_statusAnswer = true;
 static unsigned int s_statusUpdate = 60000;
 static StatusThread* s_updaterThread = 0;
 
@@ -591,8 +592,8 @@ bool CdrHandler::received(Message &msg)
     }
     if (b) {
 	rval = b->update(msg,type,msg.msgTime().usec());
-	if (type == CdrAnswer)
-	    b->m_statusTime = Time::msecNow() + s_statusUpdate;
+	if (type == CdrAnswer && !b->m_statusTime)
+	    b->m_statusTime = Time::msecNow() + (s_statusAnswer ? 0 : s_statusUpdate);
     } else
 	Debug("cdrbuild",level,"Got message '%s' for untracked id '%s'",
 	    msg.c_str(),id.c_str());
@@ -603,6 +604,8 @@ bool CdrHandler::received(Message &msg)
 	if (id && (b = CdrBuilder::find(id))) {
 	    b->update(type,msg.msgTime().usec(),msg.getValue("status"));
 	    b->emit();
+	    if (type == CdrAnswer && !b->m_statusTime)
+		b->m_statusTime = Time::msecNow() + (s_statusAnswer ? 0 : s_statusUpdate);
 	}
     }
     return rval;
@@ -660,9 +663,9 @@ void StatusThread::run()
 	CdrBuilder* cdr = static_cast<CdrBuilder*>(o->get());
 	if (cdr->getStatus() != YSTRING("answered"))
 	    continue;
-	if (cdr->m_statusTime < now.msec()) {
+	if (cdr->m_statusTime && (cdr->m_statusTime < now.msec())) {
 	    cdr->emit("status");
-	    cdr->m_statusTime = now.msec() + s_statusUpdate;
+	    cdr->m_statusTime = s_statusUpdate ? (now.msec() + s_statusUpdate) : (u_int64_t)-1;
 	}
     }
     s_mutex.unlock();
@@ -674,9 +677,9 @@ void StatusThread::run()
 	Time t;
 	for (ObjList* o = s_cdrs.skipNull();o;o = o->skipNext()) {
 	    CdrBuilder* cdr = static_cast<CdrBuilder*>(o->get());
-	    if (cdr->m_statusTime && cdr->m_statusTime < t.msec()) {
+	    if (cdr->m_statusTime && (cdr->m_statusTime < t.msec())) {
 		cdr->emit("status");
-		cdr->m_statusTime = t.msec() + s_statusUpdate;
+		cdr->m_statusTime = s_statusUpdate ? (t.msec() + s_statusUpdate) : (u_int64_t)-1;
 	    }
 	}
     }
@@ -761,13 +764,14 @@ void CustomTimer::extractUsec(const String& param)
 
 void CustomTimer::getTime(String& ret, u_int64_t time)
 {
-    char buf[length() + 100];
+    DataBlock data(0,length() + 100);
+    char* buf = (char*)data.data();
     time_t rawtime = time / 1000000;
-    String tmp = c_str();
+    String tmp = *this;
     if (m_usecIndex >= 0) {
-	char buf[10];
-	printTime(buf,time,m_usecCount);
-	String usec(buf);
+	char buf1[10];
+	printTime(buf1,time,m_usecCount);
+	String usec(buf1);
 	tmp = tmp.substr(0,m_usecIndex) + usec + tmp.substr(m_usecIndex);
     } else if (time % 1000000 > 500000){
 	rawtime ++;
@@ -782,7 +786,7 @@ void CustomTimer::getTime(String& ret, u_int64_t time)
 	timeinfo = localtime(&rawtime);
     else
 	timeinfo = gmtime(&rawtime);
-    int len = strftime (buf, length() + 100, tmp.c_str(), timeinfo);
+    int len = strftime (buf, length() + 100, tmp, timeinfo);
     ret.assign(buf,len);
 }
 
@@ -872,8 +876,11 @@ void CdrBuildPlugin::initialize()
     }
     s_cdrUpdates = cfg.getBoolValue("general","updates",true);
     s_cdrStatus = cfg.getBoolValue("general","status",false);
+    s_statusAnswer = cfg.getBoolValue("general","status_answer",true);
     int sUpdate = cfg.getIntValue("general","status_interval",60);
-    if (sUpdate < 60)
+    if (sUpdate <= 0)
+	s_statusUpdate = 0;
+    else if (sUpdate < 60)
 	s_statusUpdate = 60000;
     else if (sUpdate > 600)
 	s_statusUpdate = 600000;

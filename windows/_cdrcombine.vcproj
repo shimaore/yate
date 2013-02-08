@@ -2,8 +2,9 @@
 <VisualStudioProject
 	ProjectType="Visual C++"
 	Version="8.00"
-	Name="_javascript"
-	ProjectGUID="{2CA56C29-3A9D-4FF6-82EE-49E6AD4F4CF1}"
+	Name="_cdrcombine"
+	ProjectGUID="{43716F17-125F-4B1C-B783-7AAC92AA136E}"
+	RootNamespace="_cdrcombine"
 	>
 	<Platforms>
 		<Platform
@@ -41,19 +42,19 @@
 				MkTypLibCompatible="true"
 				SuppressStartupBanner="true"
 				TargetEnvironment="1"
-				TypeLibraryName=".\Release/_javascript.tlb"
+				TypeLibraryName=".\Release/_cdrcombine.tlb"
 				HeaderFileName=""
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="2"
 				InlineFunctionExpansion="1"
-				AdditionalIncludeDirectories=".,..,..\libs\yscript,..\libs\ypbx,..\libs\yxml"
-				PreprocessorDefinitions="NDEBUG;WIN32;_WINDOWS;_USRDLL;LIBYPBX_STATIC;LIBYXML_STATIC"
+				AdditionalIncludeDirectories=".,.."
+				PreprocessorDefinitions="NDEBUG;WIN32;_WINDOWS;_USRDLL;_CRT_SECURE_NO_DEPRECATE"
 				StringPooling="true"
 				RuntimeLibrary="2"
 				EnableFunctionLevelLinking="true"
-				PrecompiledHeaderFile=".\Release\modules/_javascript.pch"
+				PrecompiledHeaderFile=".\Release\modules/_cdrcombine.pch"
 				AssemblerListingLocation=".\Release\modules/"
 				ObjectFile=".\Release\modules/"
 				ProgramDataBaseFileName=".\Release\modules/"
@@ -74,12 +75,11 @@
 			<Tool
 				Name="VCLinkerTool"
 				IgnoreImportLibrary="true"
-				AdditionalDependencies="Release/libyscript.lib"
-				OutputFile="Release/javascript.yate"
+				OutputFile="Release/cdrcombine.yate"
 				LinkIncremental="1"
 				SuppressStartupBanner="true"
-				ProgramDatabaseFile=".\Release/javascript.pdb"
-				ImportLibrary=".\Release/javascript.lib"
+				ProgramDatabaseFile=".\Release/cdrcombine.pdb"
+				ImportLibrary=".\Release/cdrcombine.lib"
 				TargetMachine="1"
 			/>
 			<Tool
@@ -94,7 +94,7 @@
 			<Tool
 				Name="VCBscMakeTool"
 				SuppressStartupBanner="true"
-				OutputFile=".\Release/_javascript.bsc"
+				OutputFile=".\Release/_cdrcombine.bsc"
 			/>
 			<Tool
 				Name="VCFxCopTool"
@@ -137,18 +137,18 @@
 				MkTypLibCompatible="true"
 				SuppressStartupBanner="true"
 				TargetEnvironment="1"
-				TypeLibraryName=".\Debug/_javascript.tlb"
+				TypeLibraryName=".\Debug/_cdrcombine.tlb"
 				HeaderFileName=""
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="0"
-				AdditionalIncludeDirectories=".,..,..\libs\yscript,..\libs\ypbx,..\libs\yxml"
-				PreprocessorDefinitions="_DEBUG;WIN32;_WINDOWS;_USRDLL;LIBYPBX_STATIC;LIBYXML_STATIC"
+				AdditionalIncludeDirectories=".,.."
+				PreprocessorDefinitions="_DEBUG;WIN32;_WINDOWS;_USRDLL;_CRT_SECURE_NO_DEPRECATE"
 				MinimalRebuild="true"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="3"
-				PrecompiledHeaderFile=".\Debug\modules/_javascript.pch"
+				PrecompiledHeaderFile=".\Debug\modules/_cdrcombine.pch"
 				AssemblerListingLocation=".\Debug\modules/"
 				ObjectFile=".\Debug\modules/"
 				ProgramDataBaseFileName=".\Debug\modules/"
@@ -170,13 +170,12 @@
 			<Tool
 				Name="VCLinkerTool"
 				IgnoreImportLibrary="true"
-				AdditionalDependencies="Debug/libyscript.lib"
-				OutputFile="Debug/javascript.yate"
+				OutputFile="Debug/cdrcombine.yate"
 				LinkIncremental="1"
 				SuppressStartupBanner="true"
 				GenerateDebugInformation="true"
-				ProgramDatabaseFile=".\Debug/javascript.pdb"
-				ImportLibrary=".\Debug/javascript.lib"
+				ProgramDatabaseFile=".\Debug/cdrcombine.pdb"
+				ImportLibrary=".\Debug/cdrcombine.lib"
 				TargetMachine="1"
 			/>
 			<Tool
@@ -191,7 +190,7 @@
 			<Tool
 				Name="VCBscMakeTool"
 				SuppressStartupBanner="true"
-				OutputFile=".\Debug/_javascript.bsc"
+				OutputFile=".\Debug/_cdrcombine.bsc"
 			/>
 			<Tool
 				Name="VCFxCopTool"
@@ -215,7 +214,7 @@
 			Filter="cpp;c;cxx;rc;def;r;odl;idl;hpj;bat"
 			>
 			<File
-				RelativePath="..\modules\javascript.cpp"
+				RelativePath="..\modules\cdrcombine.cpp"
 				>
 				<FileConfiguration
 					Name="Release|Win32"

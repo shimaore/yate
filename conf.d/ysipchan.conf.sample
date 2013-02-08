@@ -13,6 +13,55 @@
 
 [general]
 ; This section sets global variables of the implementation
+; It also configures a listener named 'general' who is always enabled and set as default
+;  UDP transport (if type is udp)
+; The listener is always processed before other 'listener ' sections
+
+; type: keyword: Listener type
+; Allowed values:
+; udp: Build an UDP listener
+; tcp: Build a TCP listener
+; tls: Build a TLS listener (encrypted TCP)
+; Defaults to udp if missing or invalid
+;type=
+
+; default: boolean: Specifiy if this is the default transport to use when none specified
+; Defaults to yes (unlike the other listeners)
+;default=yes
+
+; addr: ipaddress: IP address to bind to
+; Leave it empty to listen on all available interfaces
+;addr=
+
+; port: integer: Port to bind to
+; Defaults to 5060 for UDP and TCP, 5061 for TLS listener
+;port=5060
+
+; udp_force_bind: boolean: Try to use a random port if failed to bind on configured one (UDP only)
+; Defaults to yes
+;udp_force_bind=yes
+
+; rtp_localip: ipaddress: IP address to bind local RTP to
+; This parameter is applied on reload
+; TCP/TLS: this parameter is applied on reload for new connections only
+; RTP local IP address will default to bound IP address if not binding on all interfaces
+; Explicitly set it to empty string to avoid using bound IP address
+;rtp_localip=
+
+; nat_address: ipaddress: IP address to advertise in SDP, empty to use the local RTP
+; This parameter is applied on reload
+; Set this parameter when you know your RTP is behind a NAT
+;nat_address=
+
+; backlog: integer: Maximum length of the queue of pending connections
+; This parameter is ignored for UDP listener
+; Set it to 0 for system maximum
+; Defaults to 5 if missing or invalid
+;backlog=5
+
+; sslcontext: string: SSL context if this is an encrypted connection
+; Ignored for non TLS listener, required for TLS listener
+;sslcontext=
 
 ; maxpkt: int: Maximum received UDP packet size, 524 to 65528, default 1500
 ; This parameter is applied on reload and can be overridden in UDP listener sections
@@ -94,11 +143,50 @@
 ;  transactions unless a retransmission arrives before having a final answer
 ;lazy100=no
 
-; dtmfinband: bool: Generate DTMF inband by default
-;dtmfinband=no
+; check_allow_info: bool: Check 'Allow' header in INVITE and OK for INFO support
+; If enabled and INFO is not supported the 'info' dtmf method will be disabled
+; This parameter can be overridden from routing by 'ocheck_allow_info' for outgoing call leg
+;  and 'icheck_allow_info' for incoming call leg
+; This parameter is ignored if info method is not enabled
+; This parameter is applied on reload for new calls only
+;check_allow_info=yes
 
-; dtmfinfo: bool: Generate INFO messages to send keypad tones
-;dtmfinfo=no
+; missing_allow_info: bool: The default value for dtmf info support if
+;  'check_allow_info' is enabled and the 'Allow' header is missing
+; This parameter can be overridden from routing by 'omissing_allow_info' for outgoing call leg
+;  and 'imissing_allow_info' for incoming call leg
+; This parameter is applied on reload for new calls only
+;missing_allow_info=enable
+
+; dtmfmethods: string: Comma separated list of methods used to send DTMFs
+; Allowed values in list:
+;  info: Use SIP INFO if initial transaction finished
+;  rfc2833: Use RFC 2833 signals if remote party advertised support
+;  inband: Send tones in audio stream
+; The methods will be used in the listed order
+; Defaults to 'rfc2833,info,inband' if missing or empty
+; Invalid values are ignored
+; E.g.
+;   'info,foo' leads to 'info'
+;   'foo,foo1' leads to 'rfc2833,info,inband'
+; This parameter can be overridden from routing by 'odtmfmethods' for outgoing call leg
+;  and 'idtmfmethods' for incoming call leg
+; Also, this parameter can be overridden in chan.dtmf messages by a 'methods' parameter
+; NOTE:
+;   When overridden from chan.dtmf an empty or invalid 'methods' parameter will be ignored
+;   Methods indicated in chan.dtmf message will be intersected with channel capabilities
+;    unless an explicit boolean true 'methods_override' parameter is present
+; This parameter is applied on reload for new calls only
+;dtmfmethods=rfc2833,info,inband
+
+; honor_dtmf_detect: bool: Honor DTMF detected method when sending DTMFs
+; If enabled the channel will try to send a DTMF using the same method as received
+; If the detected method is not enabled it won't be used
+; This parameter can be overridden from routing by 'ohonor_dtmf_detect' for outgoing call leg
+;  and 'ihonor_dtmf_detect' for incoming call leg
+; This parameter is applied on reload for new calls only
+; Defaults to enable
+;honor_dtmf_detect=enable
 
 ; rfc2833: bool: Offer RFC2833 telephone-event by default
 ; A numeric payload >= 96 can be provided
@@ -304,51 +392,6 @@
 ;ignore_sdp_addr=no
 
 
-;[listener general]
-; This section has the following purposes:
-; - Maintain compatibility with old configuration
-; - Setup an UDP listener named 'general'
-; This section will be processed before any other listener sections
-; The following parameters can be overridden from 'general' section: maxpkt, buffer
-
-; enable: boolean: Enable or disable the UDP listener
-; This parameter is applied on reload and defaults to yes
-;enable=yes
-
-; default: boolean: Specifiy if this is the default transport to use when none specified
-; Defaults to yes (unlike the other listeners)
-;default=yes
-
-; udp_force_bind: boolean: Try to use a random port if failed to bind on configured one
-; Defaults to yes
-;udp_force_bind=yes
-
-; addr: ipaddress: IP address to bind to
-; Leave it empty to listen on all available interfaces
-;addr=
-
-; port: integer: Port to bind to
-; Defaults to 5060
-;port=5060
-
-; rtp_localip: ipaddress: IP address to bind local RTP to, empty to guess best
-; This parameter is applied on reload
-; RTP local IP address will default to bound IP address if not binding on all interfaces
-; Explicitly set it to empty string to avoid using bound IP address
-;rtp_localip=
-
-; nat_address: ipaddress: IP address to advertise in SDP, empty to use the local RTP
-; This parameter is applied on reload
-; Set this parameter when you know your RTP is behind a NAT
-;nat_address=
-
-; thread: keyword: Listener thread priority
-; Can be one of: lowest, low, normal, high, highest
-; High priorities need superuser privileges on POSIX operating systems
-; Low priorities are not recommended except for debugging
-;thread=normal
-
-
 ;[listener name]
 ; This section configures a listener named 'name' ('general' is reserved and will be ignored)
 ; The following parameters can be overridden from 'general' section:
@@ -371,7 +414,7 @@
 ; Defaults to no
 ;default=no
 
-; udp_force_bind: boolean: UDP only: try to use a random port if failed to bind on configured one
+; udp_force_bind: boolean: UDP only: try to use a random port if failed to bind on configured one (UDP only)
 ; Defaults to yes
 ;udp_force_bind=yes
 

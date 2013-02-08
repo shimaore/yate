@@ -1395,6 +1395,23 @@ XmlSaxParser::Error XmlFragment::addChild(XmlChild* child)
     return XmlSaxParser::NoError;
 }
 
+// Remove the first XmlElement from list and returns it if completed
+XmlElement* XmlFragment::popElement()
+{
+    for (ObjList* o = m_list.skipNull(); o; o = o->skipNext()) {
+	XmlChild* c = static_cast<XmlChild*>(o->get());
+	XmlElement* x = c->xmlElement();
+	if (x) {
+	     if (x->completed()) {
+		o->remove(false);
+		return x;
+	     }
+	     return 0;
+	}
+    }
+    return 0;
+}
+
 // Remove a child
 XmlChild* XmlFragment::removeChild(XmlChild* child, bool delObj)
 {
@@ -1516,10 +1533,8 @@ XmlSaxParser::Error XmlDocument::addChild(XmlChild* child)
 	// Text outside root: ignore empty, raise error otherwise
 	XmlText* text = child->xmlText();
 	if (text) {
-	    String tmp(text->getText());
-	    tmp.trimSpaces();
-	    if (!tmp) {
-		TelEngine::destruct(child);
+	    if (text->onlySpaces()) {
+		m_beforeRoot.addChild(text);
 		return XmlSaxParser::NoError;
 	    }
 	    Debug(DebugNote,"XmlDocument. Got text outside element [%p]",this);
@@ -1534,6 +1549,8 @@ XmlSaxParser::Error XmlDocument::addChild(XmlChild* child)
 	DDebug(DebugStub,"XmlDocument. Request to add xml element child to incomplete root [%p]",this);
 	return XmlSaxParser::NotWellFormed;
     }
+    if ((child->xmlText() && child->xmlText()->onlySpaces()) || child->xmlComment())
+	return m_afterRoot.addChild(child);
     // TODO: check what xml we can add after the root or if we can add
     //  anything after an incomplete root
     Debug(DebugStub,"XmlDocument. Request to add non element while having a root [%p]",this);
@@ -1543,7 +1560,7 @@ XmlSaxParser::Error XmlDocument::addChild(XmlChild* child)
 // Retrieve the document declaration
 XmlDeclaration* XmlDocument::declaration() const
 {
-    for (ObjList* o = m_beforeRoot.getChildren().skipNull(); o; o = o->skipNull()) {
+    for (ObjList* o = m_beforeRoot.getChildren().skipNull(); o; o = o->skipNext()) {
 	XmlDeclaration* d = (static_cast<XmlChild*>(o->get()))->xmlDeclaration();
 	if (d)
 	    return d;
@@ -1564,6 +1581,7 @@ void XmlDocument::toString(String& dump, bool escape, const String& indent, cons
 	dump << origIndent;
 	m_root->toString(dump,escape,indent,origIndent);
     }
+    m_afterRoot.toString(dump,escape,indent,origIndent);
 }
 
 // Reset this XmlDocument. Destroys root and clear the others xml objects
@@ -1571,6 +1589,7 @@ void XmlDocument::reset()
 {
     TelEngine::destruct(m_root);
     m_beforeRoot.clearChildren();
+    m_afterRoot.clearChildren();
     m_file.clear();
 }
 
@@ -1579,16 +1598,23 @@ XmlSaxParser::Error XmlDocument::read(Stream& in, int* error)
 {
     XmlDomParser parser(static_cast<XmlParent*>(this),false);
     char buf[8096];
+    bool start = true;
     while (true) {
 	int rd = in.readData(buf,sizeof(buf) - 1);
 	if (rd > 0) {
 	    buf[rd] = 0;
-	    if (parser.parse(buf) || parser.error() == XmlSaxParser::Incomplete)
+	    const char* text = buf;
+	    if (start) {
+		String::stripBOM(text);
+		start = false;
+	    }
+	    if (parser.parse(text) || parser.error() == XmlSaxParser::Incomplete)
 		continue;
 	    break;
 	}
 	break;
     }
+    parser.completeText();
     if (parser.error() != XmlSaxParser::NoError) {
 	DDebug(DebugNote,"XmlDocument error loading stream. Parser error %d '%s' [%p]",
 	    parser.error(),parser.getError(),this);
@@ -1616,6 +1642,7 @@ int XmlDocument::write(Stream& out, bool escape, const String& indent,
     m_beforeRoot.toString(dump,escape,indent,origIndent);
     if (m_root)
 	m_root->toString(dump,escape,indent,origIndent,completeOnly);
+    m_afterRoot.toString(dump,escape,indent,origIndent);
     return out.writeData(dump);
 }
 
@@ -1718,6 +1745,18 @@ XmlElement::XmlElement(const char* name, bool complete)
 	m_element.c_str(),this);
 }
 
+// Create a new element with a text child
+XmlElement::XmlElement(const char* name, const char* value, bool complete)
+    : m_element(name), m_prefixed(0),
+    m_parent(0), m_inheritedNs(0),
+    m_empty(true), m_complete(complete)
+{
+    setPrefixed();
+    addText(value);
+    XDebug(DebugAll,"XmlElement::XmlElement(%s) [%p]",
+	m_element.c_str(),this);
+}
+
 // Destructor
 XmlElement::~XmlElement()
 {
@@ -1782,6 +1821,13 @@ const String& XmlElement::getText()
     for (ObjList* ob = getChildren().skipNull(); ob && !txt; ob = ob->skipNext())
 	txt = (static_cast<XmlChild*>(ob->get()))->xmlText();
     return txt ? txt->getText() : String::empty();
+}
+
+XmlChild* XmlElement::getFirstChild()
+{
+    if (!m_children.getChildren().skipNull())
+	return 0;
+    return static_cast<XmlChild*>(m_children.getChildren().skipNull()->get());
 }
 
 // Add a text child
@@ -2140,6 +2186,19 @@ void XmlText::toString(String& dump, bool esc, const String& indent,
 	dump << m_text;
 }
 
+bool XmlText::onlySpaces()
+{
+    if (!m_text)
+	return true;
+    const char *s = m_text;
+    unsigned int i = 0;
+    for (;i < m_text.length();i++) {
+	if (s[i] == ' ' || s[i] == '\t' || s[i] == '\v' || s[i] == '\f' || s[i] == '\r' || s[i] == '\n')
+	    continue;
+	return false;
+    }
+    return true;
+}
 
 /*
  * XmlDoctype
