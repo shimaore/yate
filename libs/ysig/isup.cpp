@@ -2698,20 +2698,6 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 		result = transmitMessage(m);
 	    }
 	    break;
-	case SignallingEvent::Charge:
-	    if (event->message()) {
-		const String& oper = event->message()->params()[YSTRING("operation")];
-		if (oper != "charge")
-		    break;
-		// if (!validMsgState(true,SS7MsgISUP::ITX))
-		//    break;
-		SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::ITX,id());
-		copyUpper(m->params(),event->message()->params());
-		m->params().setParam("NationalMessagesNumber",String(++m_sentItxMessages));
-		mylock.drop();
-		result = transmitMessage(m);
-	    }
-	    break;
 	case SignallingEvent::Suspend:
 	    if (event->message()) {
 		if (!validMsgState(true,SS7MsgISUP::SUS))
@@ -2743,6 +2729,22 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 	//case SignallingEvent::Transfer:
 	case SignallingEvent::Charge:
 	    if (event->message()) {
+		String variant = event->message()->params().getValue(YSTRING("variant"));
+		if (variant == "SPIROU") {
+		    if (event->message()) {
+			const String& oper = event->message()->params()[YSTRING("operation")];
+			if (oper != "charge")
+			    break;
+			// if (!validMsgState(true,SS7MsgISUP::ITX))
+			//    break;
+			SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::ITX,id());
+			copyUpper(m->params(),event->message()->params());
+			m->params().setParam("NationalMessagesNumber",String(++m_sentItxMessages));
+			mylock.drop();
+			result = transmitMessage(m);
+		    }
+		    break;
+		}
 		if (!validMsgState(true,SS7MsgISUP::CRG))
 		    break;
 		SS7MsgISUP* m = new SS7MsgISUP(SS7MsgISUP::CRG,id());
