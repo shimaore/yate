@@ -296,8 +296,7 @@ public:
      * Check if the expression is empty (no operands or operators)
      * @return True if the expression is completely empty
      */
-    inline bool null() const
-	{ return m_opcodes.count() == 0; }
+    virtual bool null() const;
 
     /**
      * Dump a list of operations according to current operators dictionary
@@ -545,9 +544,10 @@ protected:
     /**
      * Returns next unary postfix operator in the parsed text
      * @param expr Pointer to text to parse, gets advanced if succeeds
+     * @param precedence The precedence of the previous operator
      * @return Operator code, OpcNone on failure
      */
-    virtual Opcode getPostfixOperator(const char*& expr);
+    virtual Opcode getPostfixOperator(const char*& expr, int precedence = 0);
 
     /**
      * Helper method to get the canonical name of an operator
@@ -591,9 +591,10 @@ protected:
      * Get an operand, advance parsing pointer past it
      * @param expr Pointer to text to parse, gets advanced on success
      * @param endOk Consider reaching the end of string a success
+     * @param precedence The precedence of the previous operator
      * @return True if succeeded, must add the operand internally
      */
-    virtual bool getOperand(const char*& expr, bool endOk = true);
+    virtual bool getOperand(const char*& expr, bool endOk = true, int precedence = 0);
 
     /**
      * Get an inline simple type, usually string or number
@@ -803,6 +804,7 @@ protected:
     unsigned int m_lineNo;
 
 private:
+    bool getOperandInternal(const char*& expr, bool endOk, int precedence);
     ExpExtender* m_extender;
 };
 
@@ -975,6 +977,12 @@ public:
     virtual bool valBoolean() const;
 
     /**
+     * Retrieve the name of the type of the value of this operation
+     * @return Name of the type of the value
+     */
+    virtual const char* typeOf() const;
+
+    /**
      * Clone and rename method
      * @param name Name of the cloned operation
      * @return New operation instance
@@ -1082,6 +1090,12 @@ public:
      * @return True if the wrapped object is to be interpreted as true value
      */
     virtual bool valBoolean() const;
+
+    /**
+     * Retrieve the name of the type of the value of this operation
+     * @return Name of the type of the value
+     */
+    virtual const char* typeOf() const;
 
     /**
      * Clone and rename method
@@ -1345,9 +1359,10 @@ public:
     /**
      * Create a runner adequate for this block of parsed code
      * @param context Script context, must not be NULL
+     * @param title An optional name for the runner
      * @return A new script runner, NULL if context is NULL or feature is not supported
      */
-    virtual ScriptRun* createRunner(ScriptContext* context)
+    virtual ScriptRun* createRunner(ScriptContext* context, const char* title = 0)
 	{ return 0; }
 };
 
@@ -1508,9 +1523,10 @@ public:
 
     /**
      * Resets code execution to the beginning, does not clear context
+     * @param init Initialize context
      * @return Status of the runtime after reset
      */
-    virtual Status reset();
+    virtual Status reset(bool init = false);
 
     /**
      * Execute script from where it was left, may stop and return Incomplete state
@@ -1520,9 +1536,10 @@ public:
 
     /**
      * Execute script from the beginning until it returns a final state
+     * @param init Initialize context
      * @return Final status of the runtime after code execution
      */
-    virtual Status run();
+    virtual Status run(bool init = true);
 
     /**
      * Pause the script, make it return Incomplete state
@@ -1602,9 +1619,10 @@ public:
      * Parse a string as script source code
      * @param text Source code text
      * @param fragment True if the code is just an included fragment
+     * @param file Name of the file that is being parsed
      * @return True if the text was successfully parsed
      */
-    virtual bool parse(const char* text, bool fragment = false) = 0;
+    virtual bool parse(const char* text, bool fragment = false, const char* file = 0) = 0;
 
     /**
      * Parse a file as script source code
@@ -1637,17 +1655,19 @@ public:
      * Create a runner adequate for a block of parsed code
      * @param code Parsed code block
      * @param context Script context, an empty one will be allocated if NULL
+     * @param title An optional name for the runner
      * @return A new script runner, NULL if code is NULL
      */
-    virtual ScriptRun* createRunner(ScriptCode* code, ScriptContext* context = 0) const;
+    virtual ScriptRun* createRunner(ScriptCode* code, ScriptContext* context = 0, const char* title = 0) const;
 
     /**
      * Create a runner adequate for the parsed code
      * @param context Script context, an empty one will be allocated if NULL
+     * @param title An optional name for the runner
      * @return A new script runner, NULL if code is not yet parsed
      */
-    inline ScriptRun* createRunner(ScriptContext* context = 0) const
-	{ return createRunner(code(),context); }
+    inline ScriptRun* createRunner(ScriptContext* context = 0, const char* title = 0) const
+	{ return createRunner(code(),context,title); }
 
     /**
      * Check if a script has a certain function or method
@@ -1973,6 +1993,20 @@ public:
 	{ return &m_func; }
 
     /**
+     * Retrieve the first name assigned to this function
+     * @return The name of the property towhich this function was first assigned
+     */
+    inline const String& firstName() const
+	{ return m_name; }
+
+    /**
+     * Set the name of this function if still empty
+     * @param name Name to set as first assigned name
+     */
+    inline void firstName(const char* name)
+	{ if (m_name.null()) m_name = name; }
+
+    /**
      * Retrieve the name of the N-th formal argument
      * @param index Index of the formal argument
      * @return Pointer to formal argument name, NULL if index too large
@@ -2011,6 +2045,7 @@ private:
     long int m_label;
     ScriptCode* m_code;
     ExpFunction m_func;
+    String m_name;
 };
 
 /**
@@ -2169,12 +2204,22 @@ class YSCRIPT_API JsParser : public ScriptParser
     YCLASS(JsParser,ScriptParser)
 public:
     /**
+     * Constructor
+     * @param allowLink True to allow linking of the code, false otherwise.
+     * @param allowTrace True to allow the script to enable performance tracing
+     */
+    inline JsParser(bool allowLink = true, bool allowTrace = false)
+	: m_allowLink(allowLink), m_allowTrace(allowTrace)
+	{ }
+
+    /**
      * Parse a string as Javascript source code
      * @param text Source code text
      * @param fragment True if the code is just an included fragment
+     * @param file Name of the file that is being parsed
      * @return True if the text was successfully parsed
      */
-    virtual bool parse(const char* text, bool fragment = false);
+    virtual bool parse(const char* text, bool fragment = false, const char* file = 0);
 
     /**
      * Create a context adequate for Javascript code
@@ -2186,17 +2231,19 @@ public:
      * Create a runner adequate for a block of parsed Javascript code
      * @param code Parsed code block
      * @param context Javascript context, an empty one will be allocated if NULL
+     * @param title An optional name for the runner
      * @return A new Javascript runner, NULL if code is NULL
      */
-    virtual ScriptRun* createRunner(ScriptCode* code, ScriptContext* context = 0) const;
+    virtual ScriptRun* createRunner(ScriptCode* code, ScriptContext* context = 0, const char* title = 0) const;
 
     /**
      * Create a runner adequate for the parsed Javascript code
      * @param context Javascript context, an empty one will be allocated if NULL
+     * @param title An optional name for the runner
      * @return A new Javascript runner, NULL if code is not yet parsed
      */
-    inline ScriptRun* createRunner(ScriptContext* context = 0) const
-	{ return createRunner(code(),context); }
+    inline ScriptRun* createRunner(ScriptContext* context = 0, const char* title = 0) const
+	{ return createRunner(code(),context,title); }
 
     /**
      * Check if a script has a certain function or method
@@ -2224,6 +2271,20 @@ public:
      */
     inline void basePath(const char* path)
 	{ m_basePath = path; }
+
+    /**
+     * Set whether the Javascript code should be linked or not
+     * @param allowed True to allow linking, false otherwise
+     */
+    inline void link(bool allowed = true)
+	{ m_allowLink = allowed; }
+
+    /**
+     * Set whether the Javascript code can be traced or not
+     * @param allowed True to allow tracing, false otherwise
+     */
+    inline void trace(bool allowed = true)
+	{ m_allowTrace = allowed; }
 
     /**
      * Parse and run a piece of Javascript code
@@ -2262,6 +2323,8 @@ public:
 
 private:
     String m_basePath;
+    bool m_allowLink;
+    bool m_allowTrace;
 };
 
 }; // namespace TelEngine

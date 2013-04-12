@@ -26,6 +26,8 @@
 #include <yatescript.h>
 #include <yatexml.h>
 
+#define NATIVE_TITLE "[native code]"
+
 using namespace TelEngine;
 namespace { // anonymous
 
@@ -50,6 +52,7 @@ protected:
     virtual bool commandExecute(String& retVal, const String& line);
     virtual bool commandComplete(Message& msg, const String& partLine, const String& partWord);
 private:
+    bool evalContext(String& retVal, const String& cmd, ScriptContext* context = 0);
     JsParser m_assistCode;
 };
 
@@ -91,6 +94,8 @@ public:
 	{ return m_message; }
     inline void handled()
 	{ m_handled = true; }
+    inline ScriptContext* context()
+	{ return m_runner ? m_runner->context() : 0; }
     Message* getMsg(ScriptRun* runner) const;
     static const char* stateName(State st);
 private:
@@ -190,12 +195,14 @@ class JsMessage : public JsObject
 public:
 
     inline JsMessage(Mutex* mtx)
-	: JsObject("Message",mtx,true), m_message(0), m_owned(false)
+	: JsObject("Message",mtx,true),
+	  m_message(0), m_owned(false), m_trackPrio(true)
 	{
 	    XDebug(&__plugin,DebugAll,"JsMessage::JsMessage() [%p]",this);
 	}
     inline JsMessage(Message* message, Mutex* mtx, bool owned)
-	: JsObject("Message",mtx), m_message(message), m_owned(owned)
+	: JsObject("Message",mtx),
+	  m_message(message), m_owned(owned), m_trackPrio(true)
 	{
 	    XDebug(&__plugin,DebugAll,"JsMessage::JsMessage(%p) [%p]",message,this);
 	    params().addParam(new ExpFunction("enqueue"));
@@ -226,6 +233,7 @@ public:
 	{
 	    construct->params().addParam(new ExpFunction("install"));
 	    construct->params().addParam(new ExpFunction("uninstall"));
+	    construct->params().addParam(new ExpFunction("trackName"));
 	}
     inline void clearMsg()
 	{ m_message = 0; m_owned = false; }
@@ -238,8 +246,10 @@ protected:
     void getRow(ObjList& stack, const ExpOperation* row, GenObject* context);
     void getResult(ObjList& stack, const ExpOperation& row, const ExpOperation& col, GenObject* context);
     ObjList m_handlers;
+    String m_trackName;
     Message* m_message;
     bool m_owned;
+    bool m_trackPrio;
 };
 
 class JsHandler : public MessageHandler
@@ -302,11 +312,15 @@ public:
 	    params().addParam(new ExpFunction("put"));
 	    params().addParam(new ExpFunction("getOwner"));
 	    params().addParam(new ExpFunction("getParent"));
+	    params().addParam(new ExpFunction("unprefixedTag"));
+	    params().addParam(new ExpFunction("getTag"));
 	    params().addParam(new ExpFunction("getAttribute"));
 	    params().addParam(new ExpFunction("setAttribute"));
+	    params().addParam(new ExpFunction("removeAttribute"));
 	    params().addParam(new ExpFunction("addChild"));
 	    params().addParam(new ExpFunction("getChild"));
 	    params().addParam(new ExpFunction("getChildren"));
+	    params().addParam(new ExpFunction("clearChildren"));
 	    params().addParam(new ExpFunction("addText"));
 	    params().addParam(new ExpFunction("getText"));
 	    params().addParam(new ExpFunction("getChildText"));
@@ -394,11 +408,15 @@ private:
 };
 
 static String s_basePath;
+static bool s_engineStop = false;
 static bool s_allowAbort = false;
+static bool s_allowTrace = false;
+static bool s_allowLink = true;
 
 UNLOAD_PLUGIN(unloadNow)
 {
     if (unloadNow) {
+	s_engineStop = true;
 	JsGlobal::unloadAll();
 	return __plugin.unload();
     }
@@ -699,7 +717,7 @@ bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* c
 	switch (oper.number()) {
 	    case 0:
 		if (m_message)
-		    ExpEvaluator::pushOne(stack,new ExpOperation(m_message->retValue()));
+		    ExpEvaluator::pushOne(stack,new ExpOperation(m_message->retValue(),0,true));
 		else
 		    ExpEvaluator::pushOne(stack,JsParser::nullClone());
 		break;
@@ -798,6 +816,16 @@ bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* c
 		return false;
 	}
 	JsHandler* h = new JsHandler(*name,priority,*func,context);
+	ExpOperation* filterName = static_cast<ExpOperation*>(args[3]);
+	ExpOperation* filterValue = static_cast<ExpOperation*>(args[4]);
+	if (filterName && filterValue && *filterName)
+	    h->setFilter(*filterName,*filterValue);
+	if (m_trackName) {
+	    if (m_trackPrio)
+		h->trackName(m_trackName + ":" + String(priority));
+	    else
+		h->trackName(m_trackName);
+	}
 	m_handlers.append(h);
 	Engine::install(h);
     }
@@ -816,6 +844,31 @@ bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* c
 	if (!name)
 	    return false;
 	m_handlers.remove(*name);
+    }
+    else if (oper.name() == YSTRING("trackName")) {
+	ObjList args;
+	switch (extractArgs(stack,oper,context,args)) {
+	    case 0:
+		ExpEvaluator::pushOne(stack,new ExpOperation(m_trackName,oper.name()));
+		break;
+	    case 1:
+	    case 2:
+		{
+		    ExpOperation* name = static_cast<ExpOperation*>(args[0]);
+		    ExpOperation* prio = static_cast<ExpOperation*>(args[1]);
+		    if (!name)
+			return false;
+		    m_trackName = *name;
+		    m_trackName.trimSpaces();
+		    if (prio)
+			m_trackPrio = prio->valBoolean();
+		    else
+			m_trackPrio = true;
+		}
+		break;
+	    default:
+		return false;
+	}
     }
     else
 	return JsObject::runNative(stack,oper,context);
@@ -847,7 +900,7 @@ void JsMessage::getColumn(ObjList& stack, const ExpOperation* col, GenObject* co
 		for (int r = 1; r <= rows; r++) {
 		    GenObject* o = arr->get(idx,r);
 		    if (o)
-			jsa->push(new ExpOperation(o->toString()));
+			jsa->push(new ExpOperation(o->toString(),0,true));
 		    else
 			jsa->push(JsParser::nullClone());
 		}
@@ -866,7 +919,7 @@ void JsMessage::getColumn(ObjList& stack, const ExpOperation* col, GenObject* co
 		for (int r = 1; r <= rows; r++) {
 		    GenObject* o = arr->get(c,r);
 		    if (o)
-			jsa->push(new ExpOperation(o->toString()));
+			jsa->push(new ExpOperation(o->toString(),*name,true));
 		    else
 			jsa->push(JsParser::nullClone());
 		}
@@ -897,7 +950,7 @@ void JsMessage::getRow(ObjList& stack, const ExpOperation* row, GenObject* conte
 			    continue;
 			GenObject* o = arr->get(c,idx);
 			if (o)
-			    jso->params().setParam(new ExpOperation(o->toString(),*name));
+			    jso->params().setParam(new ExpOperation(o->toString(),*name,true));
 			else
 			    jso->params().setParam((JsParser::nullClone(*name)));
 		    }
@@ -917,7 +970,7 @@ void JsMessage::getRow(ObjList& stack, const ExpOperation* row, GenObject* conte
 			continue;
 		    GenObject* o = arr->get(c,r);
 		    if (o)
-			jso->params().setParam(new ExpOperation(o->toString(),*name));
+			jso->params().setParam(new ExpOperation(o->toString(),*name,true));
 		    else
 			jso->params().setParam((JsParser::nullClone(*name)));
 		}
@@ -953,7 +1006,7 @@ void JsMessage::getResult(ObjList& stack, const ExpOperation& row, const ExpOper
 	    if (c >= 0 && c < cols) {
 		GenObject* o = arr->get(c,r + 1);
 		if (o) {
-		    ExpEvaluator::pushOne(stack,new ExpOperation(o->toString()));
+		    ExpEvaluator::pushOne(stack,new ExpOperation(o->toString(),0,true));
 		    return;
 		}
 	    }
@@ -999,14 +1052,14 @@ void JsMessage::initialize(ScriptContext* context)
 
 bool JsHandler::received(Message& msg)
 {
-    if (!m_code)
+    if (s_engineStop || !m_code)
 	return false;
     DDebug(&__plugin,DebugInfo,"Running %s(message) handler for '%s'",
 	m_function.name().c_str(),c_str());
 #ifdef DEBUG
     u_int64_t tm = Time::now();
 #endif
-    ScriptRun* runner = m_code->createRunner(m_context);
+    ScriptRun* runner = m_code->createRunner(m_context,NATIVE_TITLE);
     if (!runner)
 	return false;
     JsMessage* jm = new JsMessage(&msg,runner->context()->mutex(),false);
@@ -1175,6 +1228,22 @@ bool JsXML::runNative(ObjList& stack, const ExpOperation& oper, GenObject* conte
 	else
 	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
     }
+    else if (oper.name() == YSTRING("unprefixedTag")) {
+	if (argc != 0)
+	    return false;
+	if (m_xml)
+	    ExpEvaluator::pushOne(stack,new ExpOperation(m_xml->unprefixedTag(),m_xml->unprefixedTag()));
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else if (oper.name() == YSTRING("getTag")) {
+	if (argc != 0)
+	    return false;
+	if (m_xml)
+	    ExpEvaluator::pushOne(stack,new ExpOperation(m_xml->getTag(),m_xml->getTag()));
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
     else if (oper.name() == YSTRING("getAttribute")) {
 	if (argc != 1)
 	    return false;
@@ -1202,6 +1271,15 @@ bool JsXML::runNative(ObjList& stack, const ExpOperation& oper, GenObject* conte
 	    m_xml->removeAttribute(*name);
 	else
 	    m_xml->setAttribute(*name,*val);
+    }
+    else if (oper.name() == YSTRING("removeAttribute")) {
+	if (argc != 1)
+	    return false;
+	ExpOperation* name = static_cast<ExpOperation*>(args[0]);
+	if (!name)
+	    return false;
+	if (m_xml)
+	    m_xml->removeAttribute(*name);
     }
     else if (oper.name() == YSTRING("addChild")) {
 	if (argc < 1 || argc > 2)
@@ -1271,6 +1349,12 @@ bool JsXML::runNative(ObjList& stack, const ExpOperation& oper, GenObject* conte
 	}
 	else
 	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
+    }
+    else if (oper.name() == YSTRING("clearChildren")) {
+	if (argc)
+	    return false;
+	if (m_xml)
+	    m_xml->clearChildren();
     }
     else if (oper.name() == YSTRING("addText")) {
 	if (argc != 1)
@@ -1599,7 +1683,7 @@ JsAssist::~JsAssist()
     if (m_runner) {
 	ScriptContext* context = m_runner->context();
 	if (m_runner->callable("onUnload")) {
-	    ScriptRun* runner = m_runner->code()->createRunner(context);
+	    ScriptRun* runner = m_runner->code()->createRunner(context,NATIVE_TITLE);
 	    if (runner) {
 		ObjList args;
 		runner->call("onUnload",args);
@@ -1631,7 +1715,7 @@ bool JsAssist::init()
     JsMessage::initialize(ctx);
     JsFile::initialize(ctx);
     JsXML::initialize(ctx);
-    if (ScriptRun::Invalid == m_runner->reset())
+    if (ScriptRun::Invalid == m_runner->reset(true))
 	return false;
     ScriptContext* chan = YOBJECT(ScriptContext,ctx->getField(m_runner->stack(),YSTRING("Channel"),m_runner));
     if (chan) {
@@ -1651,7 +1735,7 @@ bool JsAssist::init()
     }
     if (!m_runner->callable("onLoad"))
 	return true;
-    ScriptRun* runner = m_runner->code()->createRunner(m_runner->context());
+    ScriptRun* runner = m_runner->code()->createRunner(m_runner->context(),NATIVE_TITLE);
     if (runner) {
 	ObjList args;
 	runner->call("onLoad",args);
@@ -1768,7 +1852,7 @@ bool JsAssist::runFunction(const String& name, Message& msg)
 #ifdef DEBUG
     u_int64_t tm = Time::now();
 #endif
-    ScriptRun* runner = __plugin.parser().createRunner(m_runner->context());
+    ScriptRun* runner = __plugin.parser().createRunner(m_runner->context(),NATIVE_TITLE);
     if (!runner)
 	return false;
 
@@ -1846,6 +1930,8 @@ JsGlobal::JsGlobal(const char* scriptName, const char* fileName, bool relPath)
     m_jsCode.basePath(s_basePath);
     if (relPath)
 	m_jsCode.adjustPath(*this);
+    m_jsCode.link(s_allowLink);
+    m_jsCode.trace(s_allowTrace);
     DDebug(&__plugin,DebugAll,"Loading global Javascript '%s' from '%s'",name().c_str(),c_str());
     File::getFileTime(c_str(),m_fileTime);
     if (m_jsCode.parseFile(*this))
@@ -1858,7 +1944,7 @@ JsGlobal::~JsGlobal()
 {
     DDebug(&__plugin,DebugAll,"Unloading global Javascript '%s'",name().c_str());
     if (m_jsCode.callable("onUnload")) {
-	ScriptRun* runner = m_jsCode.createRunner(m_context);
+	ScriptRun* runner = m_jsCode.createRunner(m_context,NATIVE_TITLE);
 	if (runner) {
 	    ObjList args;
 	    runner->call("onUnload",args);
@@ -1972,7 +2058,7 @@ static const char* s_cmds[] = {
     0
 };
 
-static const char* s_cmdsLine = "  javascript {info|eval instructions...|reload script}";
+static const char* s_cmdsLine = "  javascript {info|eval[=context] instructions...|reload script}";
 
 
 JsModule::JsModule()
@@ -2016,21 +2102,52 @@ bool JsModule::commandExecute(String& retVal, const String& line)
     if (cmd.startSkip("reload") && cmd.trimSpaces())
 	return JsGlobal::reloadScript(cmd);
 
-    if (!(cmd.startSkip("eval") && cmd.trimSpaces()))
-	return false;
+    if (cmd.startSkip("eval=",false) && cmd.trimSpaces()) {
+	String scr;
+	cmd.extractTo(" ",scr).trimSpaces();
+	if (scr.null() || cmd.null())
+	    return false;
+	Lock mylock(this);
+	JsGlobal* script = static_cast<JsGlobal*>(JsGlobal::globals()[scr]);
+	if (script) {
+	    RefPointer<ScriptContext> ctxt = script->context();
+	    mylock.drop();
+	    return evalContext(retVal,cmd,ctxt);
+	}
+	JsAssist* assist = static_cast<JsAssist*>(calls()[scr]);
+	if (assist) {
+	    RefPointer<ScriptContext> ctxt = assist->context();
+	    mylock.drop();
+	    return evalContext(retVal,cmd,ctxt);
+	}
+	retVal << "Cannot find script context: " << scr << "\n\r";
+	return true;
+    }
 
+    if (cmd.startSkip("eval") && cmd.trimSpaces())
+	return evalContext(retVal,cmd);
+
+    return false;
+}
+
+bool JsModule::evalContext(String& retVal, const String& cmd, ScriptContext* context)
+{
     JsParser parser;
     parser.basePath(s_basePath);
+    parser.link(s_allowLink);
+    parser.trace(s_allowTrace);
     if (!parser.parse(cmd)) {
 	retVal << "parsing failed\r\n";
 	return true;
     }
-    ScriptRun* runner = parser.createRunner();
-    JsObject::initialize(runner->context());
-    JsEngine::initialize(runner->context());
-    JsMessage::initialize(runner->context());
-    JsFile::initialize(runner->context());
-    JsXML::initialize(runner->context());
+    ScriptRun* runner = parser.createRunner(context,"[command line]");
+    if (!context) {
+	JsObject::initialize(runner->context());
+	JsEngine::initialize(runner->context());
+	JsMessage::initialize(runner->context());
+	JsFile::initialize(runner->context());
+	JsXML::initialize(runner->context());
+    }
     ScriptRun::Status st = runner->run();
     if (st == ScriptRun::Succeeded) {
 	while (ExpOperation* op = ExpEvaluator::popOne(runner->stack())) {
@@ -2051,6 +2168,19 @@ bool JsModule::commandComplete(Message& msg, const String& partLine, const Strin
     if (partLine.null() || (partLine == "help"))
 	itemComplete(msg.retValue(),name(),partWord);
     else if (partLine == name()) {
+	static const String s_eval("eval=");
+	if (partWord.startsWith(s_eval)) {
+	    lock();
+	    ListIterator iter(JsGlobal::globals());
+	    while (JsGlobal* script = static_cast<JsGlobal*>(iter.get()))
+		if (!script->name().null())
+		    itemComplete(msg.retValue(),s_eval + script->name(),partWord);
+	    iter.assign(calls());
+	    while (JsAssist* assist = static_cast<JsAssist*>(iter.get()))
+		itemComplete(msg.retValue(),s_eval + assist->id(),partWord);
+	    unlock();
+	    return true;
+	}
 	for (const char** list = s_cmds; *list; list++)
 	    itemComplete(msg.retValue(),*list,partWord);
 	return true;
@@ -2141,6 +2271,7 @@ bool JsModule::received(Message& msg, int id)
 	    }
 	    break;
 	case Halt:
+	    s_engineStop = true;
 	    JsGlobal::unloadAll();
 	    return false;
     } // switch (id)
@@ -2155,7 +2286,7 @@ bool JsModule::received(Message& msg, int id, ChanAssist* assist)
 ChanAssist* JsModule::create(Message& msg, const String& id)
 {
     lock();
-    ScriptRun* runner = m_assistCode.createRunner();
+    ScriptRun* runner = m_assistCode.createRunner(0,NATIVE_TITLE);
     unlock();
     if (!runner)
 	return 0;
@@ -2187,9 +2318,13 @@ void JsModule::initialize()
 	tmp += Engine::pathSeparator();
     s_basePath = tmp;
     s_allowAbort = cfg.getBoolValue("general","allow_abort");
+    s_allowTrace = cfg.getBoolValue("general","allow_trace");
+    s_allowLink = cfg.getBoolValue("general","allow_link",true);
     lock();
     m_assistCode.clear();
     m_assistCode.basePath(tmp);
+    m_assistCode.link(s_allowLink);
+    m_assistCode.trace(s_allowTrace);
     tmp = cfg.getValue("general","routing");
     m_assistCode.adjustPath(tmp);
     if (m_assistCode.parseFile(tmp))

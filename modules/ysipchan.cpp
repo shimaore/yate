@@ -61,7 +61,7 @@ class SIPDriver;
 // 1 minute
 #define BIND_RETRY_MAX 60000
 
-static TokenDict dict_errors[] = {
+static const TokenDict dict_errors[] = {
     { "incomplete", 484 },
     { "noroute", 404 },
     { "noroute", 604 },
@@ -99,7 +99,7 @@ static TokenDict dict_errors[] = {
 
 static const char s_dtmfs[] = "0123456789*#ABCDF";
 
-static TokenDict info_signals[] = {
+static const TokenDict info_signals[] = {
     { "*", 10 },
     { "#", 11 },
     { "A", 12 },
@@ -1081,10 +1081,17 @@ public:
 class SipHandler : public MessageHandler
 {
 public:
+    enum {
+	BodyRaw = 0,
+	BodyBase64 = 1,
+	BodyHex = 2,
+	BodyHexS = 3,
+    };
     SipHandler()
 	: MessageHandler("xsip.generate",110,plugin.name())
 	{ }
     virtual bool received(Message &msg);
+    static const TokenDict s_bodyEnc[];
 };
 
 static ObjList s_lines;
@@ -1110,6 +1117,7 @@ static bool s_reg_async = true;
 static bool s_multi_ringing = false;
 static bool s_refresh_nosdp = true;
 static bool s_update_target = false;
+static bool s_preventive_bye = true;
 static bool s_ignoreVia = true;          // Ignore Via headers and send answer back to the source
 static bool s_sipt_isup = false;         // Control the application/isup body processing
 static bool s_printMsg = true;           // Print sent/received SIP messages to output
@@ -1127,6 +1135,7 @@ static String s_sslKeyFile;              // File containing the key of the SSL c
 static int s_expires_min = EXPIRES_MIN;
 static int s_expires_def = EXPIRES_DEF;
 static int s_expires_max = EXPIRES_MAX;
+static int s_defEncoding = SipHandler::BodyBase64;
 
 static String s_statusCmd = "status";
 
@@ -1179,6 +1188,14 @@ const TokenDict YateSIPTransport::s_statusName[] = {
     { 0, 0 },
 };
 
+// Body encodings
+const TokenDict SipHandler::s_bodyEnc[] = {
+    { "raw",    BodyRaw},
+    { "base64", BodyBase64},
+    { "hex",    BodyHex},
+    { "hexs",   BodyHexS},
+    { 0, 0 },
+};
 
 // Generate a transport id index when needed
 static inline unsigned int getTransIndex()
@@ -3996,6 +4013,7 @@ bool YateSIPEngine::checkUser(String& username, const String& realm, const Strin
 	m.copyParam(*params,"caller");
 	m.copyParam(*params,"called");
 	m.copyParam(*params,"billid");
+	m.copyParam(*params,"expires");
     }
     if (authLine && m_foreignAuth) {
 	m.addParam("auth",*authLine);
@@ -4660,6 +4678,16 @@ void YateSIPEndPoint::regRun(const SIPMessage* message, SIPTransaction* t)
     msg.addParam("number",addr.getUser());
     msg.addParam("sip_uri",t->getURI());
     msg.addParam("sip_callid",t->getCallID());
+    String tmp(message->getHeader("Expires"));
+    if (tmp.null())
+	tmp = hl->getParam("expires");
+    int expires = tmp.toInteger(-1);
+    if (expires < 0)
+	expires = s_expires_def;
+    if (expires > s_expires_max)
+	expires = s_expires_max;
+    tmp = expires;
+    msg.setParam("expires",tmp);
     String user;
     int age = t->authUser(user,false,&msg);
     DDebug(&plugin,DebugAll,"User '%s' age %d",user.c_str(),age);
@@ -4711,15 +4739,6 @@ void YateSIPEndPoint::regRun(const SIPMessage* message, SIPTransaction* t)
     msg.setParam("ip_port",String(rport));
     msg.setParam("ip_transport",message->getParty()->getProtoName());
 
-    bool dereg = false;
-    String tmp(message->getHeader("Expires"));
-    if (tmp.null())
-	tmp = hl->getParam("expires");
-    int expires = tmp.toInteger(-1);
-    if (expires < 0)
-	expires = s_expires_def;
-    if (expires > s_expires_max)
-	expires = s_expires_max;
     if (expires && (expires < s_expires_min)) {
 	tmp = s_expires_min;
 	SIPMessage* r = new SIPMessage(t->initialMessage(),423);
@@ -4728,8 +4747,7 @@ void YateSIPEndPoint::regRun(const SIPMessage* message, SIPTransaction* t)
 	r->deref();
 	return;
     }
-    tmp = expires;
-    msg.setParam("expires",tmp);
+    bool dereg = false;
     if (!expires) {
 	msg = "user.unregister";
 	dereg = true;
@@ -4892,11 +4910,27 @@ bool YateSIPEndPoint::generic(SIPEvent* e, SIPTransaction* t)
 	else if (message->body) {
 	    const DataBlock& binBody = message->body->getBody();
 	    String bodyText;
-	    Base64 b64(binBody.data(),binBody.length(),false);
-	    b64.encode(bodyText);
-	    b64.clear(false);
+	    int enc = s_defEncoding;
+	    switch (enc) {
+		case SipHandler::BodyRaw:
+		    bodyText.assign((const char*)binBody.data(),binBody.length());
+		    break;
+		case SipHandler::BodyHex:
+		    bodyText.hexify(binBody.data(),binBody.length());
+		    break;
+		case SipHandler::BodyHexS:
+		    bodyText.hexify(binBody.data(),binBody.length(),' ');
+		    break;
+		default:
+		    enc = SipHandler::BodyBase64;
+		    {
+			Base64 b64(binBody.data(),binBody.length(),false);
+			b64.encode(bodyText);
+			b64.clear(false);
+		    }
+	    }
 	    m.addParam("xsip_type",message->body->getType());
-	    m.addParam("xsip_body_encoding","base64");
+	    m.addParam("xsip_body_encoding",lookup(enc,SipHandler::s_bodyEnc));
 	    m.addParam("xsip_body",bodyText);
 	}
     }
@@ -5522,6 +5556,7 @@ void YateSIPConnection::hangup()
     Engine::enqueue(m);
     if (!error)
 	error = m_reason.c_str();
+    bool sendBye = true;
     switch (m_state) {
 	case Cleared:
 	    clearTransaction();
@@ -5558,7 +5593,8 @@ void YateSIPConnection::hangup()
 			m->addHeader(hl);
 		    }
 		    m->setBody(buildSIPBody());
-		    plugin.ep()->engine()->addMessage(m);
+		    if (plugin.ep()->engine()->addMessage(m) && !s_preventive_bye)
+			sendBye = false;
 		}
 		m->deref();
 	    }
@@ -5567,7 +5603,7 @@ void YateSIPConnection::hangup()
     clearTransaction();
     m_state = Cleared;
 
-    if (m_byebye && m_dialog.localTag && m_dialog.remoteTag) {
+    if (sendBye && m_byebye && m_dialog.localTag && m_dialog.remoteTag) {
 	SIPMessage* m = createDlgMsg("BYE");
 	if (m) {
 	    if (m_reason) {
@@ -7763,15 +7799,24 @@ bool SipHandler::received(Message &msg)
 	else {
 	    DataBlock binBody;
 	    bool ok = false;
-	    if (bodyEnc == YSTRING("base64")) {
-		Base64 b64;
-		b64 << body;
-		ok = b64.decode(binBody);
+	    switch (bodyEnc.toInteger(s_bodyEnc)) {
+		case BodyRaw:
+		    binBody.append(body);
+		    ok = true;
+		case BodyHex:
+		    ok = binBody.unHexify(body,body.length());
+		    break;
+		case BodyHexS:
+		    ok = binBody.unHexify(body,body.length(),' ');
+		    break;
+		case BodyBase64:
+		    {
+			Base64 b64;
+			b64 << body;
+			ok = b64.decode(binBody);
+		    }
+		    break;
 	    }
-	    else if (bodyEnc == YSTRING("hex"))
-		ok = binBody.unHexify(body,body.length());
-	    else if (bodyEnc == YSTRING("hexs"))
-		ok = binBody.unHexify(body,body.length(),' ');
 
 	    if (ok)
 		sip->setBody(new MimeBinaryBody(type,(const char*)binBody.data(),binBody.length()));
@@ -8045,10 +8090,12 @@ void SIPDriver::initialize()
     s_multi_ringing = s_cfg.getBoolValue("general","multi_ringing",false);
     s_refresh_nosdp = s_cfg.getBoolValue("general","refresh_nosdp",true);
     s_update_target = s_cfg.getBoolValue("general","update_target",false);
+    s_preventive_bye = s_cfg.getBoolValue("general","preventive_bye",true);
     s_ignoreVia = s_cfg.getBoolValue("general","ignorevia",true);
     s_printMsg = s_cfg.getBoolValue("general","printmsg",true);
     s_tcpMaxpkt = getMaxpkt(s_cfg.getIntValue("general","tcp_maxpkt",4096),4096);
     s_lineKeepTcpOffline = s_cfg.getBoolValue("general","line_keeptcpoffline",!Engine::clientMode());
+    s_defEncoding = s_cfg.getIntValue("general","body_encoding",SipHandler::s_bodyEnc,SipHandler::BodyBase64);
     s_sipt_isup = s_cfg.getBoolValue("sip-t","isup",false);
     s_expires_min = s_cfg.getIntValue("registrar","expires_min",EXPIRES_MIN);
     s_expires_def = s_cfg.getIntValue("registrar","expires_def",EXPIRES_DEF);

@@ -205,6 +205,8 @@ namespace TelEngine {
 #define YSTRING(s) (s)
 #endif
 
+#define YSTRING_INIT_HASH ((unsigned) -1)
+
 /**
  * Abort execution (and coredump if allowed) if the abort flag is set.
  * This function may not return.
@@ -1251,6 +1253,18 @@ public:
      */
     static const ObjList& empty();
 
+    /**
+     * Sort this list
+     * @param callbackCompare pointer to a callback function that should compare two objects.
+     * <pre>
+     *     obj1 First object of the comparation
+     *     obj2 Second object of the comparation
+     *     context Data context
+     *     return 0 if the objects are equal; positive value if obj2 > obj1; negative value if obj1 > obj2
+     * </pre>
+     * @param context Context data.
+     */
+    void sort(int (*callbackCompare)(GenObject* obj1, GenObject* obj2, void* context), void* context = 0);
 private:
     ObjList* m_next;
     GenObject* m_obj;
@@ -1713,7 +1727,12 @@ public:
      * Get the hash of the contained string.
      * @return The hash of the string.
      */
-    unsigned int hash() const;
+    inline unsigned int hash() const
+	{
+	    if (m_hash == YSTRING_INIT_HASH)
+		m_hash = hash(m_string);
+	    return m_hash;
+	}
 
     /**
      * Get the hash of an arbitrary string.
@@ -1919,7 +1938,8 @@ public:
      * Appending operator for strings.
      * @see TelEngine::strcat
      */
-    String& operator+=(const char* value);
+    inline String& operator+=(const char* value)
+	{ return append(value,-1); }
 
     /**
      * Appending operator for single characters.
@@ -2027,6 +2047,14 @@ public:
      * Stream style extraction operator for booleans
      */
     String& operator>>(bool& store);
+
+    /**
+     * Append a string to the current string
+     * @param value String from which to append
+     * @param len Length of the data to copy, -1 for full string
+     * @return Reference to the String
+     */
+    String& append(const char* value, int len);
 
     /**
      * Conditional appending with a separator
@@ -2401,6 +2429,16 @@ YATE_API int lookup(const char* str, const TokenDict* tokens, int defvalue = 0, 
  */
 YATE_API const char* lookup(int value, const TokenDict* tokens, const char* defvalue = 0);
 
+class NamedList;
+
+/**
+ * Utility method to return from a chan.control handler
+ * @param params The parameters list
+ * @param ret The return value
+ * @param retVal The error message
+ * @return ret if the message was not generated from rmanager.
+ */
+YATE_API bool controlReturn(NamedList* params, bool ret, const char* retVal = 0);
 
 /**
  * A regular expression matching class.
@@ -2767,6 +2805,7 @@ public:
 
     /**
      * Get the item in the list that holds an object
+     * The item is searched sequentially in the lists, not using it's String hash
      * @param obj Pointer to the object to search for
      * @return Pointer to the found item or NULL
      */
@@ -3790,9 +3829,10 @@ public:
     /**
      * Remove a specific parameter
      * @param param Pointer to parameter to remove
+     * @param delParam True to destroy the parameter
      * @return Reference to this NamedList
      */
-    NamedList& clearParam(NamedString* param);
+    NamedList& clearParam(NamedString* param, bool delParam = true);
 
     /**
      * Copy a parameter from another NamedList, clears it if not present there

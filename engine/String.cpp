@@ -99,7 +99,6 @@ const char* lookup(int value, const TokenDict* tokens, const char* defvalue)
 }
 
 #define MAX_MATCH 9
-#define INIT_HASH ((unsigned)-1)
 
 class StringMatchPrivate
 {
@@ -189,13 +188,13 @@ const String& String::empty()
 }
 
 String::String()
-    : m_string(0), m_length(0), m_hash(INIT_HASH), m_matches(0)
+    : m_string(0), m_length(0), m_hash(YSTRING_INIT_HASH), m_matches(0)
 {
     XDebug(DebugAll,"String::String() [%p]",this);
 }
 
 String::String(const char* value, int len)
-    : m_string(0), m_length(0), m_hash(INIT_HASH), m_matches(0)
+    : m_string(0), m_length(0), m_hash(YSTRING_INIT_HASH), m_matches(0)
 {
     XDebug(DebugAll,"String::String(\"%s\",%d) [%p]",value,len,this);
     assign(value,len);
@@ -203,7 +202,7 @@ String::String(const char* value, int len)
 
 String::String(const String& value)
     : GenObject(),
-      m_string(0), m_length(0), m_hash(INIT_HASH), m_matches(0)
+      m_string(0), m_length(0), m_hash(YSTRING_INIT_HASH), m_matches(0)
 {
     XDebug(DebugAll,"String::String(%p) [%p]",&value,this);
     if (!value.null()) {
@@ -215,7 +214,7 @@ String::String(const String& value)
 }
 
 String::String(char value, unsigned int repeat)
-    : m_string(0), m_length(0), m_hash(INIT_HASH), m_matches(0)
+    : m_string(0), m_length(0), m_hash(YSTRING_INIT_HASH), m_matches(0)
 {
     XDebug(DebugAll,"String::String('%c',%d) [%p]",value,repeat,this);
     if (value && repeat) {
@@ -231,7 +230,7 @@ String::String(char value, unsigned int repeat)
 }
 
 String::String(int value)
-    : m_string(0), m_length(0), m_hash(INIT_HASH), m_matches(0)
+    : m_string(0), m_length(0), m_hash(YSTRING_INIT_HASH), m_matches(0)
 {
     XDebug(DebugAll,"String::String(%d) [%p]",value,this);
     char buf[64];
@@ -243,7 +242,7 @@ String::String(int value)
 }
 
 String::String(unsigned int value)
-    : m_string(0), m_length(0), m_hash(INIT_HASH), m_matches(0)
+    : m_string(0), m_length(0), m_hash(YSTRING_INIT_HASH), m_matches(0)
 {
     XDebug(DebugAll,"String::String(%u) [%p]",value,this);
     char buf[64];
@@ -255,7 +254,7 @@ String::String(unsigned int value)
 }
 
 String::String(bool value)
-    : m_string(0), m_length(0), m_hash(INIT_HASH), m_matches(0)
+    : m_string(0), m_length(0), m_hash(YSTRING_INIT_HASH), m_matches(0)
 {
     XDebug(DebugAll,"String::String(%u) [%p]",value,this);
     m_string = ::strdup(boolText(value));
@@ -265,7 +264,7 @@ String::String(bool value)
 }
 
 String::String(const String* value)
-    : m_string(0), m_length(0), m_hash(INIT_HASH), m_matches(0)
+    : m_string(0), m_length(0), m_hash(YSTRING_INIT_HASH), m_matches(0)
 {
     XDebug(DebugAll,"String::String(%p) [%p]",&value,this);
     if (value && !value->null()) {
@@ -383,7 +382,7 @@ String& String::hexify(void* data, unsigned int len, char sep, bool upCase)
 void String::changed()
 {
     clearMatches();
-    m_hash = INIT_HASH;
+    m_hash = YSTRING_INIT_HASH;
     m_length = m_string ? ::strlen(m_string) : 0;
 }
 
@@ -577,37 +576,6 @@ String& String::operator=(const char* value)
     return *this;
 }
 
-String& String::operator+=(const char* value)
-{
-    if (value && !*value)
-	value = 0;
-    if (value) {
-	if (m_string) {
-	    int olen = length();
-	    int len = ::strlen(value)+olen;
-	    char *tmp1 = m_string;
-	    char *tmp2 = (char *) ::malloc(len+1);
-	    if (tmp2) {
-		::strncpy(tmp2,m_string,olen);
-		tmp2[olen] = 0;
-		::strncat(tmp2,value,len-olen);
-		tmp2[len] = 0;
-		m_string = tmp2;
-		::free(tmp1);
-	    }
-	    else
-		Debug("String",DebugFail,"malloc(%d) returned NULL!",len+1);
-	}
-	else {
-	    m_string = ::strdup(value);
-	    if (!m_string)
-		Debug("String",DebugFail,"strdup() returned NULL!");
-	}
-	changed();
-    }
-    return *this;
-}
-
 String& String::operator=(char value)
 {
     char buf[2] = {value,0};
@@ -723,6 +691,38 @@ String& String::operator>>(bool& store)
 		return *this;
 	    }
 	}
+    }
+    return *this;
+}
+
+String& String::append(const char* value, int len)
+{
+    if (len && value && *value) {
+	if (len < 0) {
+	    if (!m_string) {
+		m_string = ::strdup(value);
+		if (!m_string)
+		    Debug("String",DebugFail,"strdup() returned NULL!");
+		changed();
+		return *this;
+	    }
+	    len = ::strlen(value);
+	}
+	int olen = length();
+	len += olen;
+	char *tmp1 = m_string;
+	char *tmp2 = (char *) ::malloc(len+1);
+	if (tmp2) {
+	    if (m_string)
+		::strncpy(tmp2,m_string,olen);
+	    ::strncpy(tmp2+olen,value,len-olen);
+	    tmp2[len] = 0;
+	    m_string = tmp2;
+	    ::free(tmp1);
+	}
+	else
+	    Debug("String",DebugFail,"malloc(%d) returned NULL!",len+1);
+	changed();
     }
     return *this;
 }
@@ -1033,15 +1033,19 @@ String String::msgEscape(const char* str, char extraEsc)
     if (TelEngine::null(str))
 	return s;
     char c;
-    while ((c=*str++)) {
-	if ((unsigned char)c < ' ' || c == ':' || c == extraEsc) {
+    const char* pos = str;
+    char buff[3] =  {'%', '%', '\0'};
+    while ((c=*pos++)) {
+	if ((unsigned char)c < ' ' || c == ':' || c == extraEsc)
 	    c += '@';
-	    s += '%';
-	}
-	else if (c == '%')
-	    s += c;
-	s += c;
+	else if (c != '%')
+	    continue;
+	buff[1] = c;
+	s.append(str,pos - str - 1);
+	s += buff;
+	str = pos;
     }
+    s += str;
     return s;
 }
 
@@ -1058,6 +1062,7 @@ String String::msgUnescape(const char* str, int* errptr, char extraEsc)
 	if ((unsigned char)c < ' ') {
 	    if (errptr)
 		*errptr = (pos-str) - 1;
+	    s.append(str,pos - str - 1);
 	    return s;
 	}
 	else if (c == '%') {
@@ -1067,11 +1072,15 @@ String String::msgUnescape(const char* str, int* errptr, char extraEsc)
 	    else if (c != '%') {
 		if (errptr)
 		    *errptr = (pos-str) - 1;
+		s.append(str,pos - str - 1);
 		return s;
 	    }
+	    s.append(str,pos - str - 2);
+	    s += c;
+	    str = pos;
 	}
-	s += c;
     }
+    s += str;
     if (errptr)
 	*errptr = -1;
     return s;
@@ -1140,13 +1149,6 @@ String String::uriUnescape(const char* str, int* errptr)
     if (errptr)
 	*errptr = -1;
     return s;
-}
-
-unsigned int String::hash() const
-{
-    if (m_hash == INIT_HASH)
-	m_hash = hash(m_string);
-    return m_hash;
 }
 
 unsigned int String::hash(const char* value)
