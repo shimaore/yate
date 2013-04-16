@@ -353,6 +353,9 @@ public:
     // Enqueue received events
     bool enqueueEvent(SignallingCircuitEvent* e);
 private:
+    bool setLoopback();
+    bool clearLoopback();
+    bool setupContinuityTest();
     unsigned int m_channel;              // Channel number inside span
     WpSource* m_sourceValid;             // Circuit's source if reserved, otherwise: 0
     WpConsumer* m_consumerValid;         // Circuit's consumer if reserved, otherwise: 0
@@ -1238,6 +1241,17 @@ WpCircuit::~WpCircuit()
     TelEngine::destruct(m_consumer);
 }
 
+bool WpCircuit::setLoopback() {
+    return m_source->attach(m_consumer,true);
+}
+bool WpCircuit::clearLoopback() {
+    return m_source->detach(m_consumer);
+}
+
+bool WpCircuit::setupContinuityTest() {
+    return true;
+}
+
 // Change circuit status. Clear events on succesfully changes status
 // Connected: Set valid source and consumer
 // Otherwise: Invalidate and reset source and consumer
@@ -1247,6 +1261,7 @@ bool WpCircuit::status(Status newStat, bool sync)
     if (SignallingCircuit::status() == newStat)
 	return true;
     // Allow status change for the following values
+    bool special = false;
     switch (newStat) {
 	case Missing:
 	case Disabled:
@@ -1255,7 +1270,18 @@ bool WpCircuit::status(Status newStat, bool sync)
 	    m_specialMode.clear();
 	    // fall through
 	case Special:
+	    if (m_specialMode.null())
+		return false;
+	    if (m_specialMode == YSTRING("loopback"))
+		 setLoopback();
+	    if (m_specialMode == YSTRING("conttest"))
+		setupContinuityTest();
+	    special = true;
+	    break;
 	case Connected:
+	    if (m_specialMode == YSTRING("loopback"))
+		 clearLoopback();
+	    m_specialMode.clear();
 	    break;
 	default: ;
 	    Debug(group(),DebugNote,
