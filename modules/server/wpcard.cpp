@@ -1262,6 +1262,7 @@ bool WpCircuit::status(Status newStat, bool sync)
 	return true;
     // Allow status change for the following values
     bool special = false;
+    bool ok = true;
     switch (newStat) {
 	case Missing:
 	case Disabled:
@@ -1272,15 +1273,15 @@ bool WpCircuit::status(Status newStat, bool sync)
 	case Special:
 	    if (m_specialMode.null())
 		return false;
-	    if (m_specialMode == YSTRING("loopback"))
-		 setLoopback();
-	    if (m_specialMode == YSTRING("conttest"))
-		setupContinuityTest();
+	    if (m_specialMode == "loopback")
+		 ok = setLoopback();
+	    if (m_specialMode == "conttest")
+		ok = setupContinuityTest();
 	    special = true;
 	    break;
 	case Connected:
 	    if (m_specialMode == YSTRING("loopback"))
-		 clearLoopback();
+		 ok = clearLoopback();
 	    m_specialMode.clear();
 	    break;
 	default: ;
@@ -1320,7 +1321,8 @@ bool WpCircuit::status(Status newStat, bool sync)
 		m.addParam("span",span()->toString());
 	    if (m_specialMode)
 		m.addParam("mode",m_specialMode);
-	    return Engine::dispatch(m);
+	    Engine::dispatch(m);
+	    return ok;
 	}
 	return true;
     }
