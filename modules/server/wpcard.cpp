@@ -1242,18 +1242,10 @@ WpCircuit::~WpCircuit()
 }
 
 bool WpCircuit::setLoopback() {
-    bool outcome;
-    XDebug(group(),DebugAll,"WpCircuit::setLoopback() [%p]",this);
-    outcome = m_source->attach(m_consumer,true);
-    XDebug(group(),DebugAll,"WpCircuit::setLoopback() outcome=%s [%p]",outcome?"OK":"Failed",this);
-    return outcome;
+    return m_source->attach(m_consumer,true);
 }
 bool WpCircuit::clearLoopback() {
-    bool outcome;
-    XDebug(group(),DebugAll,"WpCircuit::clearLoopback() [%p]",this);
-    outcome = m_source->detach(m_consumer);
-    XDebug(group(),DebugAll,"WpCircuit::clearLoopback() outcome=%s [%p]",outcome?"OK":"Failed",this);
-    return outcome;
+    return m_source->detach(m_consumer);
 }
 
 bool WpCircuit::setupContinuityTest() {
