@@ -1244,6 +1244,7 @@ WpCircuit::~WpCircuit()
 bool WpCircuit::setLoopback() {
     return m_source->attach(m_consumer,true);
 }
+
 bool WpCircuit::clearLoopback() {
     return m_source->detach(m_consumer);
 }
@@ -1273,14 +1274,18 @@ bool WpCircuit::status(Status newStat, bool sync)
 	case Special:
 	    if (m_specialMode.null())
 		return false;
-	    if (m_specialMode == "loopback")
+	    if (m_specialMode == "loopback") {
 		 ok = setLoopback();
-	    if (m_specialMode == "conttest")
+		 break;
+	    }
+	    if (m_specialMode == "conttest") {
 		ok = setupContinuityTest();
+		break;
+	    }
 	    special = true;
 	    break;
 	case Connected:
-	    if (m_specialMode == YSTRING("loopback"))
+	    if (m_specialMode == "loopback")
 		 ok = clearLoopback();
 	    m_specialMode.clear();
 	    break;
@@ -1312,7 +1317,7 @@ bool WpCircuit::status(Status newStat, bool sync)
     if (enableData) {
 	m_sourceValid = m_source;
 	m_consumerValid = m_consumer;
-	if (newStat == Special) {
+	if (special) {
 	    Message m("circuit.special");
 	    m.userData(this);
 	    if (group())
@@ -1321,8 +1326,7 @@ bool WpCircuit::status(Status newStat, bool sync)
 		m.addParam("span",span()->toString());
 	    if (m_specialMode)
 		m.addParam("mode",m_specialMode);
-	    Engine::dispatch(m);
-	    return ok;
+	    return Engine::dispatch(m);
 	}
 	return true;
     }
