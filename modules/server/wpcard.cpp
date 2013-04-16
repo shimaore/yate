@@ -1276,7 +1276,7 @@ bool WpCircuit::status(Status newStat, bool sync)
 	case Idle:
 	case Reserved:
 	    m_specialMode.clear();
-	    // fall through
+	    break;
 	case Special:
 	    if (m_specialMode.null())
 		return false;
