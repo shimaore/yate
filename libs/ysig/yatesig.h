@@ -9268,6 +9268,7 @@ private:
     // Debug flags
     bool m_printMsg;                     // Print messages to output
     bool m_extendedDebug;                // Extended debug flag
+    String m_testScenario;               // Test exception cases
 };
 
 /**

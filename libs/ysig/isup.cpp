@@ -3259,7 +3259,9 @@ SignallingEvent* SS7ISUPCall::processSegmented(SS7MsgISUP* sgm, bool timeout)
 		break;
 	    }
 	    m_sgmMsg->params().setParam("overlapped",String::boolText(m_overlap));
+	    if (isup()->m_testScenario != "NO_ACM") { /* Q.784.1 5.2.1 */
 	    m_lastEvent = new SignallingEvent(SignallingEvent::NewCall,m_sgmMsg,this);
+	    }
 	    break;
 	case SS7MsgISUP::CCR:
 	    if (m_state < Testing) {
@@ -3442,7 +3444,8 @@ SS7ISUP::SS7ISUP(const NamedList& params, unsigned char sio)
       m_lockTimer(2000),
       m_lockGroup(true),
       m_printMsg(false),
-      m_extendedDebug(false)
+      m_extendedDebug(false),
+      m_testScenario(params.getValue(YSTRING("test-scenario")))
 {
 #ifdef DEBUG
     if (debugAt(DebugAll)) {
