@@ -1253,14 +1253,25 @@ bool WpCircuit::clearLoopback() {
 }
 
 bool WpCircuit::setupContinuityTest() {
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) m_source=%p m_consumer=%p [%p]",code(),m_source,m_consumer,this);
+    if(!m_source || !m_consumer)
+	return false;
     // Start generating "cotv" tone on m_source.
     String tone_name = "cotv";
-    ToneSource* tone_source = ToneSource::getTone(tone_name,YSTRING(""));
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) getTone [%p]",code(),this);
+    ToneSource* tone_source = ToneSource::getTone(tone_name,YSTRING("itu"));
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) attach tone_source=%p [%p]",code(),tone_source,this);
+    if(!tone_source)
+	return false;
     if(!tone_source->attach(m_consumer,true))
 	return false;
     // Start detection of tone on m_consumer.
     // This will generate a "chan.masquerade", message = "chan.dtmf", "text" = "O", "detected"="inband"
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) new ToneConsumer [%p]",code(),this);
     ToneConsumer* tone_consumer = new ToneConsumer((String)this,"cotv");
+    if(!tone_consumer)
+	return false;
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) tone_consumer=%p [%p]",code(),tone_consumer,this);
     if(!m_source->attach(tone_consumer,true))
 	return false;
     return true;
@@ -1330,7 +1341,7 @@ bool WpCircuit::status(Status newStat, bool sync)
     if (enableData) {
 	m_sourceValid = m_source;
 	m_consumerValid = m_consumer;
-	if (special) {
+	if (special && !ok) {
 	    Message m("circuit.special");
 	    m.userData(this);
 	    if (group())
@@ -1341,7 +1352,7 @@ bool WpCircuit::status(Status newStat, bool sync)
 		m.addParam("mode",m_specialMode);
 	    return Engine::dispatch(m);
 	}
-	return true;
+	return ok;
     }
     // Disable data if not already disabled
     if (m_consumerValid) {
@@ -1366,7 +1377,7 @@ bool WpCircuit::status(Status newStat, bool sync)
 	m_source->clear();
 	m_source->m_total = 0;
     }
-    return true;
+    return ok;
 }
 
 // Update source/consumer data format

@@ -30,6 +30,7 @@ using namespace TelEngine;
 
 static ObjList s_toneDesc;               // List of configured tones
 static ObjList s_defToneDesc;            // List of default tones
+static bool s_defToneDescReady = false;
 static String s_defLang;                 // Default tone language
 static const String s_default = "itu";
 
@@ -592,6 +593,24 @@ const ToneDesc* ToneSource::getBlock(String& tone, const String& prefix, bool on
 {
     if (tone.trimBlanks().toLower().null())
 	return 0;
+    if (!s_defToneDescReady) {
+	s_defToneDesc.append(new ToneDesc(t_dial,"dial"));
+	s_defToneDesc.append(new ToneDesc(t_busy,"busy"));
+	s_defToneDesc.append(new ToneDesc(t_ring,"ring"));
+	s_defToneDesc.append(new ToneDesc(t_specdial,"specdial"));
+	s_defToneDesc.append(new ToneDesc(t_congestion,"congestion"));
+	s_defToneDesc.append(new ToneDesc(t_outoforder,"outoforder"));
+	s_defToneDesc.append(new ToneDesc(t_info,"info"));
+	s_defToneDesc.append(new ToneDesc(t_mwatt,"milliwatt"));
+	s_defToneDesc.append(new ToneDesc(t_silence,"silence"));
+	s_defToneDesc.append(new ToneDesc(t_noise,"noise"));
+	s_defToneDesc.append(new ToneDesc(t_probes[0],"probe/0"));
+	s_defToneDesc.append(new ToneDesc(t_probes[1],"probe/1"));
+	s_defToneDesc.append(new ToneDesc(t_probes[2],"probe/2"));
+	s_defToneDesc.append(new ToneDesc(t_probes[3],"cotv"));
+	s_defToneDesc.append(new ToneDesc(t_probes[4],"cots"));
+	s_defToneDescReady = true;
+    }
     XDebug(__module,DebugAll,"ToneSource::getBlock(%s,%s,%u)",
 	tone.c_str(),prefix.c_str(),oneShot);
     const ToneDesc* d = 0;
