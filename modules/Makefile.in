@@ -291,11 +291,14 @@ sip/%.yate: @srcdir@/sip/%.cpp $(MKDEPS) $(INCFILES)
 
 # Take special care of the modules that depend on optional libs
 
-$(JUSTSIG) server/wpcard.yate server/tdmcard.yate server/zapcard.yate: ../libyatesig.so
+$(JUSTSIG) server/tdmcard.yate server/zapcard.yate: ../libyatesig.so
+server/wpcard.yate: ../libyatesig.so ../libytone.so
 $(JUSTSIG): LOCALFLAGS = -I@top_srcdir@/libs/ysig
-server/wpcard.yate server/tdmcard.yate: LOCALFLAGS = -I@top_srcdir@/libs/ysig @WANPIPE_FLAGS@
+server/tdmcard.yate: LOCALFLAGS = -I@top_srcdir@/libs/ysig @WANPIPE_FLAGS@
+server/wpcard.yate: LOCALFLAGS = -I@top_srcdir@/libs/ysig -I@top_srcdir@/libs/ytone @WANPIPE_FLAGS@
 server/zapcard.yate: LOCALFLAGS = -I@top_srcdir@/libs/ysig @ZAP_FLAGS@
-$(JUSTSIG) server/wpcard.yate server/tdmcard.yate server/zapcard.yate: LOCALLIBS = -lyatesig
+$(JUSTSIG) server/tdmcard.yate server/zapcard.yate: LOCALLIBS = -lyatesig
+server/wpcard.yate: LOCALLIBS = -lyatesig -lytone
 
 sig/ss7_lnp_ansi.yate: LOCALFLAGS = -I@top_srcdir@/libs/ysig -I@top_srcdir@/libs/yasn
 sig/ss7_lnp_ansi.yate: LOCALLIBS = -lyatesig -L../libs/yasn -lyasn
@@ -402,6 +405,9 @@ server/ysnmpagent.yate: LOCALLIBS = -L../libs/yasn -lyasn -L../libs/ysnmp -lysnm
 
 ../libyatesig.so ../libs/ysig/libyatesig.a: @top_srcdir@/libs/ysig/yatesig.h
 	$(MAKE) -C ../libs/ysig
+
+../libytone.so ../libs/ytone/libytone.a: @top_srcdir@/libs/ytone/tonegen.h @top_srcdir@/libs/ytone/tonedetect.h
+	$(MAKE) -C ../libs/ytone
 
 ../libs/ilbc/libilbc.a:
 	$(MAKE) -C ../libs/ilbc

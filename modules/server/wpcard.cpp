@@ -25,6 +25,9 @@
 #include <yatephone.h>
 #include <yatesig.h>
 
+#include <tonegen.h>
+#include <tonedetect.h>
+
 #ifdef _WINDOWS
 #error This module is not for Windows
 #else
@@ -1250,6 +1253,16 @@ bool WpCircuit::clearLoopback() {
 }
 
 bool WpCircuit::setupContinuityTest() {
+    // Start generating "cotv" tone on m_source.
+    String tone_name = "cotv";
+    ToneSource* tone_source = ToneSource::getTone(tone_name,YSTRING(""));
+    if(!tone_source->attach(m_consumer,true))
+	return false;
+    // Start detection of tone on m_consumer.
+    // This will generate a "chan.masquerade", message = "chan.dtmf", "text" = "O", "detected"="inband"
+    ToneConsumer* tone_consumer = new ToneConsumer((String)this,"cotv");
+    if(!m_source->attach(tone_consumer,true))
+	return false;
     return true;
 }
 
@@ -1278,7 +1291,7 @@ bool WpCircuit::status(Status newStat, bool sync)
 		 ok = setLoopback();
 		 break;
 	    }
-	    if (m_specialMode == "conttest") {
+	    if (m_specialMode == "test:loopback") {
 		ok = setupContinuityTest();
 		break;
 	    }

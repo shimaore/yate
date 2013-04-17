@@ -1578,6 +1578,7 @@ AC_CONFIG_FILES([packing/rpm/yate.spec
 		 libs/ysig/Makefile
                  libs/ypbx/Makefile
                  libs/ymodem/Makefile
+                 libs/ytone/Makefile
 		 libs/yasn/Makefile
 	         libs/ysnmp/Makefile
 	         libs/miniwebrtc/Makefile
