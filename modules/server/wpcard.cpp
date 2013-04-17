@@ -334,9 +334,10 @@ protected:
 // Single Wanpipe B-channel
 class WpCircuit : public SignallingCircuit, public Mutex
 {
+    friend class WpSpan;
 public:
     WpCircuit(unsigned int code, SignallingCircuitGroup* group, WpSpan* data,
-	unsigned int buflen, unsigned int channel);
+	unsigned int buflen, unsigned int channel, unsigned long chanMap);
     // Get circuit channel number inside its span
     unsigned int channel() const
 	{ return m_channel; }
@@ -355,10 +356,14 @@ public:
 	{ return m_consumer; }
     // Enqueue received events
     bool enqueueEvent(SignallingCircuitEvent* e);
+protected:
+    unsigned long m_chanMap;
+    WpSpan* m_span;
 private:
     bool setLoopback();
     bool clearLoopback();
     bool setupContinuityTest();
+    bool clearContinuityTest();
     unsigned int m_channel;              // Channel number inside span
     WpSource* m_sourceValid;             // Circuit's source if reserved, otherwise: 0
     WpConsumer* m_consumerValid;         // Circuit's consumer if reserved, otherwise: 0
@@ -386,6 +391,8 @@ public:
     void run();
     // Find a circuit by channel
     WpCircuit* find(unsigned int channel);
+    // Change EC status for one of our circuits.
+    bool echoCancel(bool enable, const WpCircuit* circuit);
 protected:
     // Create circuits (all or nothing)
     // delta: number to add to each circuit code
@@ -1215,8 +1222,10 @@ unsigned long WpConsumer::Consume(const DataBlock& data, unsigned long tStamp, u
  * WpCircuit
  */
 WpCircuit::WpCircuit(unsigned int code, SignallingCircuitGroup* group, WpSpan* data,
-	unsigned int buflen, unsigned int channel)
+	unsigned int buflen, unsigned int channel, unsigned long chanmap)
     : SignallingCircuit(TDM,code,Idle,group,data), Mutex(true,"WpCircuit"),
+    m_chanMap(chanmap),
+    m_span(data),
     m_channel(channel),
     m_sourceValid(0),
     m_consumerValid(0),
@@ -1245,14 +1254,19 @@ WpCircuit::~WpCircuit()
 }
 
 bool WpCircuit::setLoopback() {
-    return m_source->attach(m_consumer,true);
+    return m_span->echoCancel(false,this) &&
+	m_source->attach(m_consumer,true);
 }
 
 bool WpCircuit::clearLoopback() {
-    return m_source->detach(m_consumer);
+    return m_source->detach(m_consumer) &&
+	m_span->echoCancel(true,this);
 }
 
 bool WpCircuit::setupContinuityTest() {
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) m_span=%p [%p]",code(),m_span,this);
+    if (!m_span->echoCancel(false,this))
+	return false;
     Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) m_source=%p m_consumer=%p [%p]",code(),m_source,m_consumer,this);
     if(!m_source || !m_consumer)
 	return false;
@@ -1274,6 +1288,14 @@ bool WpCircuit::setupContinuityTest() {
     Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) tone_consumer=%p [%p]",code(),tone_consumer,this);
     if(!m_source->attach(tone_consumer,true))
 	return false;
+    return true;
+}
+
+bool WpCircuit::clearContinuityTest() {
+    if (!m_span->echoCancel(true,this))
+	return false;
+
+    // FIXME: clear the tonegen / tonedetect
     return true;
 }
 
@@ -1310,7 +1332,9 @@ bool WpCircuit::status(Status newStat, bool sync)
 	    break;
 	case Connected:
 	    if (m_specialMode == "loopback")
-		 ok = clearLoopback();
+		ok = clearLoopback();
+	    if (m_specialMode == "test:loopback")
+		ok = clearContinuityTest();
 	    m_specialMode.clear();
 	    break;
 	default: ;
@@ -1636,11 +1660,16 @@ bool WpSpan::createCircuits(unsigned int delta, const String& cicList)
     bool ok = true;
     m_chanMap = 0;
     for (i = 0; i < m_count; i++) {
-	m_circuits[i] = new WpCircuit(delta + cicCodes[i],m_group,this,m_buflen,cicCodes[i]);
+	unsigned int channel = cicCodes[i];
+	unsigned long circuit_chanmap = ((unsigned long)1 << (channel - 1));
+	m_circuits[i] = new WpCircuit(delta + cicCodes[i],m_group,this,m_buflen,channel,circuit_chanmap);
+	Debug(m_group,DebugNote,
+	    "WpSpan('%s'). circuits[i] = %p [%p]",
+	    id().safe(),m_circuits[i],this);
 	if (m_group->insert(m_circuits[i])) {
 	    m_circuits[i]->ref();
 	    if (m_circuits[i]->channel())
-		m_chanMap |= ((unsigned long)1 << (m_circuits[i]->channel() - 1));
+		m_chanMap |= circuit_chanmap;
 	    continue;
 	}
 	// Failure
@@ -1788,6 +1817,24 @@ void WpSpan::run()
 		    s->put(swap(*dat));
 	    }
 	}
+    }
+}
+
+// Change EC on one of our circuits
+bool WpSpan::echoCancel(bool enable, const WpCircuit* circuit)
+{
+    if (!circuit) {
+	Debug(m_group,DebugNote,"WpSpan::echoCancel(): no circuit.");
+	return false;
+    }
+    if (circuit->m_span != this) {
+	Debug(m_group,DebugNote,"WpSpan::echoCancel(): Circuit does not belong to this span.");
+	return false;
+    }
+    if (m_echoCancel) {
+	return m_socket.echoCancel(enable,circuit->m_chanMap);
+    } else {
+	return true;
     }
 }
 
