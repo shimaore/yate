@@ -183,10 +183,14 @@ public:
 	{ return m_card; }
     inline const String& device() const
 	{ return m_device; }
+    inline const String& devname() const
+	{ return m_devname; }
     inline void card(const char* name)
 	{ m_card = name; }
     inline void device(const char* name)
 	{ m_device = name; }
+    inline void devname(const char* name)
+	{ m_devname = name; }
     // Get/Set echo canceller availability
     inline bool echoCanAvail() const
 	{ return m_echoCanAvail; }
@@ -225,7 +229,8 @@ private:
     LinkStatus m_status;                  // The state of the link
     Socket m_socket;                     // The socket
     String m_card;                       // Card name used to open socket
-    String m_device;                     // Device name used to open socket
+    String m_device;                     // Device name used to open socket (e.g. "w1g2")
+    String m_devname;                    // Device name used for ioctl (e.g. "wanpipe1")
     bool m_echoCanAvail;                 // Echo canceller is available or not
     bool m_canRead;                      // Set by select(). Can read from socket
     bool m_canWrite;                     // Set by select(). Can write to socket
@@ -585,6 +590,7 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
     if (fd >= 0) {
 	wan_ec_api_t ecapi;
 	::memset(&ecapi,0,sizeof(ecapi));
+	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
 #ifdef HAVE_WANPIPE_HWEC_3310
 	ecapi.fe_chan_map = chanmap;
 #else
@@ -606,11 +612,85 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 #endif
 #endif
 	}
-	else
+	else {
 	    ecapi.cmd = WAN_EC_CMD_DTMF_DISABLE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.u_tone_config.id = WP_API_EVENT_TONE_DTMF;
+#ifdef NEW_WANPIPE_API
+	    ecapi.u_tone_config.type = WAN_EC_TONE_STOP;
+	    ecapi.u_tone_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
+#else
+	    ecapi.u_dtmf_config.type = WAN_EC_TONE_STOP;
+#ifdef HAVE_WANPIPE_HWEC_3310
+	    ecapi.u_dtmf_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
+#else
+	    ecapi.u_dtmf_config.port = WAN_EC_CHANNEL_PORT_SOUT;
+#endif
+#endif
+	}
 	ecapi.err = WAN_EC_API_RC_OK;
-	if (::ioctl(fd,ecapi.cmd,ecapi))
-	    operation = "IOCTL";
+	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
+	    operation = "IOCTL DTMF";
+
+#ifdef NEW_WANPIPE_API
+	ok = (0 == operation);
+
+	// Change Echo-Canceler state
+	::memset(&ecapi,0,sizeof(ecapi));
+	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
+#ifdef HAVE_WANPIPE_HWEC_3310
+	ecapi.fe_chan_map = chanmap;
+#else
+	ecapi.channel_map = chanmap;
+#endif
+	if (enable) {
+	    ecapi.cmd = WAN_EC_API_CMD_OPMODE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.u_chan_opmode.opmode = 0; // Normal
+	}
+	else {
+	    ecapi.cmd = WAN_EC_API_CMD_OPMODE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.u_chan_opmode.opmode = 5; // No Echo
+	}
+	ecapi.err = WAN_EC_API_RC_OK;
+	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
+	    operation = "IOCTL Echo";
+
+	ok = (0 == operation);
+
+	// Change CED (2100Hz) tone removal
+	::memset(&ecapi,0,sizeof(ecapi));
+	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
+#ifdef HAVE_WANPIPE_HWEC_3310
+	ecapi.fe_chan_map = chanmap;
+#else
+	ecapi.channel_map = chanmap;
+#endif
+	wan_custom_param_t custom_param;
+	strncpy(custom_param.name,"WANEC_EnableToneDisabler",sizeof(custom_param.name));
+	if (enable) {
+	    strncpy(custom_param.sValue,"TRUE",sizeof(custom_param.sValue));
+	    ecapi.cmd = WAN_EC_API_CMD_MODIFY_CHANNEL;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.custom_conf.param_no = 1;
+	    ecapi.u_chan_custom.custom = 1; // notused
+	    ecapi.u_chan_custom.custom_conf.param_no = 1;
+	    ecapi.u_chan_custom.custom_conf.params = &custom_param;
+	}
+	else {
+	    strncpy(custom_param.sValue,"FALSE",sizeof(custom_param.sValue));
+	    ecapi.cmd = WAN_EC_API_CMD_MODIFY_CHANNEL;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.custom_conf.param_no = 1;
+	    ecapi.u_chan_custom.custom = 1;
+	    ecapi.u_chan_custom.custom_conf.param_no = 1;
+	    ecapi.u_chan_custom.custom_conf.params = &custom_param;
+	}
+	ecapi.err = WAN_EC_API_RC_OK;
+	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
+	    operation = "IOCTL CED removal";
+#endif
     }
     else
 	operation = "Open";
@@ -1536,6 +1616,7 @@ bool WpSpan::init(const NamedList& config, const NamedList& defaults, NamedList&
 	return false;
     }
     // Set socket card / device
+    m_socket.devname(config);
     m_socket.card(!params.null() ? params : config);
     const char* voice = params.getValue("voicegroup",config.getValue("voicegroup"));
     if (!voice) {
@@ -1661,7 +1742,7 @@ bool WpSpan::createCircuits(unsigned int delta, const String& cicList)
     m_chanMap = 0;
     for (i = 0; i < m_count; i++) {
 	unsigned int channel = cicCodes[i];
-	unsigned long circuit_chanmap = ((unsigned long)1 << (channel - 1));
+	unsigned long circuit_chanmap = ((unsigned long)1 << channel);
 	m_circuits[i] = new WpCircuit(delta + cicCodes[i],m_group,this,m_buflen,channel,circuit_chanmap);
 	Debug(m_group,DebugNote,
 	    "WpSpan('%s'). circuits[i] = %p [%p]",
@@ -1711,7 +1792,51 @@ void WpSpan::run()
 	m_buffer = new unsigned char[m_bufferLen];
     }
     DDebug(m_group,DebugInfo,
-	"WpSpan('%s'). Worker is running: circuits=%u, buffer=%u, samples=%u [%p]",
+	"WpSpan('%s'). Worker is running: circuits=%u, buffer=%u, samples=%u [%p]",	wan_ec_api_t ecapi;
+	::memset(&ecapi,0,sizeof(ecapi));
+	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
+#ifdef HAVE_WANPIPE_HWEC_3310
+	ecapi.fe_chan_map = chanmap;
+#else
+	ecapi.channel_map = chanmap;
+#endif
+	if (enable) {
+	    ecapi.cmd = WAN_EC_CMD_DTMF_ENABLE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    // event on start of tone, before echo canceller
+#ifdef NEW_WANPIPE_API
+	    ecapi.u_tone_config.type = WAN_EC_TONE_PRESENT;
+	    ecapi.u_tone_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
+#else
+	    ecapi.u_dtmf_config.type = WAN_EC_TONE_PRESENT;
+#ifdef HAVE_WANPIPE_HWEC_3310
+	    ecapi.u_dtmf_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
+#else
+	    ecapi.u_dtmf_config.port = WAN_EC_CHANNEL_PORT_SOUT;
+#endif
+#endif
+	}
+	else {
+	    ecapi.cmd = WAN_EC_CMD_DTMF_DISABLE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.u_tone_config.id = WP_API_EVENT_TONE_DTMF;
+#ifdef NEW_WANPIPE_API
+	    ecapi.u_tone_config.type = WAN_EC_TONE_STOP;
+	    ecapi.u_tone_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
+#else
+	    ecapi.u_dtmf_config.type = WAN_EC_TONE_STOP;
+#ifdef HAVE_WANPIPE_HWEC_3310
+	    ecapi.u_dtmf_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
+#else
+	    ecapi.u_dtmf_config.port = WAN_EC_CHANNEL_PORT_SOUT;
+#endif
+#endif
+	}
+	ecapi.err = WAN_EC_API_RC_OK;
+	if (::ioctl(fd,ecapi.cmd,&ecapi))
+	    operation = "IOCTL DTMF";
+
+
 	id().safe(),m_count,m_bufferLen,m_samples,this);
     updateStatus();
     while (true) {
