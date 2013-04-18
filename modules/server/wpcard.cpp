@@ -633,6 +633,7 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 	    operation = "IOCTL DTMF";
 
 #ifdef NEW_WANPIPE_API
+/*
 	ok = (0 == operation);
 
 	// Change Echo-Canceler state
@@ -656,7 +657,33 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 	ecapi.err = WAN_EC_API_RC_OK;
 	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
 	    operation = "IOCTL Echo";
+*/
 
+# define WAN_EC_API_CMD_BYPASS_ENABLE 7
+# define WAN_EC_API_CMD_BYPASS_DISABLE 8
+	ok = (0 == operation);
+
+	// Change Echo-Canceler state
+	::memset(&ecapi,0,sizeof(ecapi));
+	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
+#ifdef HAVE_WANPIPE_HWEC_3310
+	ecapi.fe_chan_map = chanmap;
+#else
+	ecapi.channel_map = chanmap;
+#endif
+	if (enable) {
+	    ecapi.cmd = WAN_EC_API_CMD_BYPASS_DISABLE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	}
+	else {
+	    ecapi.cmd = WAN_EC_API_CMD_BYPASS_ENABLE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	}
+	ecapi.err = WAN_EC_API_RC_OK;
+	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
+	    operation = "IOCTL Echo";
+
+/*
 	ok = (0 == operation);
 
 	// Change CED (2100Hz) tone removal
@@ -671,6 +698,7 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 	strncpy(custom_param.name,"WANEC_EnableToneDisabler",sizeof(custom_param.name));
 	if (enable) {
 	    strncpy(custom_param.sValue,"TRUE",sizeof(custom_param.sValue));
+	    custom_param.dValue = 1;
 	    ecapi.cmd = WAN_EC_API_CMD_MODIFY_CHANNEL;
 	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
 	    ecapi.custom_conf.param_no = 1;
@@ -680,6 +708,7 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 	}
 	else {
 	    strncpy(custom_param.sValue,"FALSE",sizeof(custom_param.sValue));
+	    custom_param.dValue = 0;
 	    ecapi.cmd = WAN_EC_API_CMD_MODIFY_CHANNEL;
 	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
 	    ecapi.custom_conf.param_no = 1;
@@ -690,6 +719,7 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 	ecapi.err = WAN_EC_API_RC_OK;
 	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
 	    operation = "IOCTL CED removal";
+*/
 #endif
     }
     else
