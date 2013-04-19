@@ -44,6 +44,7 @@ extern "C" {
 #include <wanpipe.h>
 #ifdef NEW_WANPIPE_API
 #include <aft_core.h>
+#include <libsangoma.h>
 #else
 #include <sdla_aft_te1.h>
 #endif
