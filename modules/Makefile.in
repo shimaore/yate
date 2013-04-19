@@ -298,7 +298,7 @@ server/tdmcard.yate: LOCALFLAGS = -I@top_srcdir@/libs/ysig @WANPIPE_FLAGS@
 server/wpcard.yate: LOCALFLAGS = -I@top_srcdir@/libs/ysig -I@top_srcdir@/libs/ytone @WANPIPE_FLAGS@
 server/zapcard.yate: LOCALFLAGS = -I@top_srcdir@/libs/ysig @ZAP_FLAGS@
 $(JUSTSIG) server/tdmcard.yate server/zapcard.yate: LOCALLIBS = -lyatesig
-server/wpcard.yate: LOCALLIBS = -lyatesig -lytone
+server/wpcard.yate: LOCALLIBS = -lyatesig -lytone -lsangoma
 
 sig/ss7_lnp_ansi.yate: LOCALFLAGS = -I@top_srcdir@/libs/ysig -I@top_srcdir@/libs/yasn
 sig/ss7_lnp_ansi.yate: LOCALLIBS = -lyatesig -L../libs/yasn -lyasn

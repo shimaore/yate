@@ -580,10 +580,12 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 #ifdef HAVE_WANPIPE_HWEC
     /* WAN API for enable/disable of the EC */
     // api.cmd = WP_API_CMD_ENABLE_HWEC;
+    char devname[32];
+    ::strncpy(devname,(const char*)m_devname,sizeof(devname));
     if(enable) {
-	sangoma_hwec_enable(m_device,chanmap);
+	sangoma_hwec_enable(devname,chanmap);
     } else {
-	sangoma_hwec_disable(m_device,chanmap);
+	sangoma_hwec_disable(devname,chanmap);
     }
 
     int fd = -1;
