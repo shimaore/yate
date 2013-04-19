@@ -578,16 +578,6 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
     bool ok = false;
 
 #ifdef HAVE_WANPIPE_HWEC
-    /* WAN API for enable/disable of the EC */
-    // api.cmd = WP_API_CMD_ENABLE_HWEC;
-    char devname[32];
-    ::strncpy(devname,(const char*)m_devname,sizeof(devname));
-    if(enable) {
-	sangoma_hwec_enable(devname,chanmap);
-    } else {
-	sangoma_hwec_disable(devname,chanmap);
-    }
-
     int fd = -1;
     String dev;
     dev << WANEC_DEV_DIR << WANEC_DEV_NAME;
@@ -644,7 +634,7 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 	    operation = "IOCTL DTMF";
 
 #ifdef NEW_WANPIPE_API
-/*
+
 	ok = (0 == operation);
 
 	// Change Echo-Canceler state
@@ -668,7 +658,7 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 	ecapi.err = WAN_EC_API_RC_OK;
 	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
 	    operation = "IOCTL Echo";
-*/
+
 /*
 # define WAN_EC_API_CMD_BYPASS_ENABLE 7
 # define WAN_EC_API_CMD_BYPASS_DISABLE 8
@@ -731,6 +721,20 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
 	    operation = "IOCTL CED removal";
 */
+
+    /* WAN API for enable/disable of the EC */
+    // api.cmd = WP_API_CMD_ENABLE_HWEC;
+    char devname[32];
+    ::strncpy(devname,(const char*)m_devname,sizeof(devname));
+    if(enable) {
+	// sangoma_tdm_enable_hwec(fd,tdm_api);
+	sangoma_hwec_enable(devname,chanmap);
+    } else {
+	// sangoma_tdm_disable_hwec(fd,tdm_api);
+	sangoma_hwec_disable(devname,chanmap);
+    }
+
+
 #endif
     }
     else

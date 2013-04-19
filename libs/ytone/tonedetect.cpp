@@ -331,6 +331,7 @@ unsigned long ToneConsumer::Consume(const DataBlock& data, unsigned long tStamp,
 		s+=2;
 		break;
 	    default:
+		Debug(__module,DebugAll,"Consume %d",*s);
 		m_xv[2] = *s++;
 	}
 	double dx = m_xv[2] - m_xv[0];
