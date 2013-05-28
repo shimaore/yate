@@ -1,0 +1,4 @@
+echo "Building"
+g++ -DDEBUG -I. -L./libs/ytone -L. tester.cpp -lytone -lyate
+echo "Running"
+LD_LIBRARY_PATH=. ./a.out

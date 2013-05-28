@@ -22,6 +22,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 #include "tonedetect.h"
+#include <iostream>
 
 #define __module "tonedetect"
 
@@ -280,14 +281,17 @@ void ToneConsumer::checkFax()
 // Check if we detected a Continuity Test tone
 void ToneConsumer::checkCont()
 {
+    std::cout << "Hello" << std::endl;
     if (m_cont.value() < m_pwr*THRESHOLD2_REL_COT)
 	return;
+    std::cout << "Hello 2" << std::endl;
     if (m_cont.value() > m_pwr) {
 	DDebug(__module,DebugNote,"Overshoot on %s, signal=%0.2f, total=%0.2f",
 	    m_id.c_str(),m_cont.value(),m_pwr);
 	init();
 	return;
     }
+    std::cout << "Hello 3" << std::endl;
     DDebug(__module,DebugInfo,"Continuity detected on %s, signal=%0.1f, total=%0.1f",
 	m_id.c_str(),m_cont.value(),m_pwr);
     // prepare for new detection
