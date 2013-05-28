@@ -44,6 +44,9 @@ using namespace TelEngine;
 #define ISUP_T9_MINVAL  90000
 #define ISUP_T9_DEFVAL  0
 #define ISUP_T9_MAXVAL  180000
+#define ISUP_T24_MINVAL 0
+#define ISUP_T24_DEFVAL 2000
+#define ISUP_T24_MAXVAL 2000
 #define ISUP_T27_MINVAL 30000
 #define ISUP_T27_DEFVAL 240000
 #define ISUP_T27_MAXVAL 300000
@@ -2304,6 +2307,7 @@ SS7ISUPCall::SS7ISUPCall(SS7ISUP* controller, SignallingCircuit* cic,
     m_iamTimer(ISUP_T7_DEFVAL),          // Setup, Testing: Q.764: T7  - 20..30 seconds
                                          // Releasing: Q.764: T1: 15..60 seconds
     m_sgmRecvTimer(ISUP_T34_DEFVAL),     // Q.764: T34 - 2..4 seconds
+    m_iamContTimer(ISUP_T24_DEFVAL),     // Q.764: T24 - 4 minutes
     m_contTimer(ISUP_T27_DEFVAL),        // Q.764: T27 - 4 minutes
     m_anmTimer(0),                       // Q.764 T9 Q.118: 1.5 - 3 minutes, not always used
     m_sentItxMessages(0)
@@ -2320,6 +2324,8 @@ SS7ISUPCall::SS7ISUPCall(SS7ISUP* controller, SignallingCircuit* cic,
 	m_iamTimer.interval(isup()->m_t7Interval);
     if (isup()->m_t9Interval)
 	m_anmTimer.interval(isup()->m_t9Interval);
+    if (isup()->m_t24Interval)
+	m_contTimer.interval(isup()->m_t24Interval);
     if (isup()->m_t27Interval)
 	m_contTimer.interval(isup()->m_t27Interval);
     if (isup()->m_t34Interval)
@@ -2494,6 +2500,7 @@ SignallingEvent* SS7ISUPCall::getEvent(const Time& when)
 	    case Testing:
 	    case Setup:
 		if (timeout(isup(),this,m_iamTimer,when,"IAM")) {
+		    // FIXME? m_contTimer (T27) should not be running on the Originating Exchange
 		    m_contTimer.stop();
 		    if (m_circuitTesting) {
 			if (m_iamMsg)
@@ -2505,6 +2512,14 @@ SignallingEvent* SS7ISUPCall::getEvent(const Time& when)
 		    }
 		    else
 			setReason("timeout",0);
+		    m_lastEvent = release();
+		    break;
+		}
+		if (timeout(isup(),this,m_iamContTimer,when,"T24")) {
+		    m_iamContTimer.stop();
+		    setReason("bearer-cap-not-available",0);
+		    transmitCOT(false);
+		    // FIXME re-attempt the call on a different CIC.
 		    m_lastEvent = release();
 		    break;
 		}
@@ -2753,6 +2768,13 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 		result = transmitMessage(m);
 	    }
 	    break;
+	case SignallingEvent::ContinuitySuccessful:
+	    if (validMsgState(true,SS7MsgISUP::COT)) {
+		mylock.drop();
+		transmitCOT(true);
+		result = true;
+		break;
+	    }
 	default:
 	    DDebug(isup(),DebugStub,
 		"Call(%u). sendEvent not implemented for '%s' [%p]",
@@ -3141,6 +3163,15 @@ bool SS7ISUPCall::transmitSAM(const char* extra)
     return true;
 }
 
+// Transmit COT.
+bool SS7ISUPCall::transmitCOT(bool success)
+{
+    SS7MsgISUP* msg = new SS7MsgISUP(SS7MsgISUP::COT,id());
+    msg->params().addParam("ContinuityIndicators",
+        success ? "success" : "failed");
+    return transmitMessage(msg);
+}
+
 // (Re)transmit REL. Create and populate the message if needed
 // Remember sls
 bool SS7ISUPCall::transmitREL(const NamedList* params)
@@ -3430,6 +3461,7 @@ SS7ISUP::SS7ISUP(const NamedList& params, unsigned char sio)
       m_t19Interval(300000),             // Q.764 T19 (CGB global) 5..15 minutes
       m_t20Interval(20000),              // Q.764 T20 (CGU) 15..60 seconds
       m_t21Interval(300000),             // Q.764 T21 (CGU global) 5..15 minutes
+      m_t24Interval(ISUP_T24_DEFVAL),    // Q.764 T27 2 seconds
       m_t27Interval(ISUP_T27_DEFVAL),    // Q.764 T27 4 minutes
       m_t34Interval(ISUP_T34_DEFVAL),    // Q.764 T34 2..4 seconds
       m_uptTimer(0),
@@ -3516,6 +3548,7 @@ SS7ISUP::SS7ISUP(const NamedList& params, unsigned char sio)
     // Timers
     m_t7Interval = SignallingTimer::getInterval(params,"t7",ISUP_T7_MINVAL,ISUP_T7_DEFVAL,ISUP_T7_MAXVAL,false);
     m_t9Interval = SignallingTimer::getInterval(params,"t9",ISUP_T9_MINVAL,ISUP_T9_DEFVAL,ISUP_T9_MAXVAL,true);
+    m_t24Interval = SignallingTimer::getInterval(params,"t24",ISUP_T24_MINVAL,ISUP_T24_DEFVAL,ISUP_T24_MAXVAL,false);
     m_t27Interval = SignallingTimer::getInterval(params,"t27",ISUP_T27_MINVAL,ISUP_T27_DEFVAL,ISUP_T27_MAXVAL,false);
     m_t34Interval = SignallingTimer::getInterval(params,"t34",ISUP_T34_MINVAL,ISUP_T34_DEFVAL,ISUP_T34_MAXVAL,false);
 
@@ -3629,6 +3662,7 @@ bool SS7ISUP::initialize(const NamedList* config)
         // Timers
 	m_t7Interval = SignallingTimer::getInterval(*config,"t7",ISUP_T7_MINVAL,ISUP_T7_DEFVAL,ISUP_T7_MAXVAL,false);
 	m_t9Interval = SignallingTimer::getInterval(*config,"t9",ISUP_T9_MINVAL,ISUP_T9_DEFVAL,ISUP_T9_MAXVAL,true);
+	m_t24Interval = SignallingTimer::getInterval(*config,"t24",ISUP_T24_MINVAL,ISUP_T24_DEFVAL,ISUP_T24_MAXVAL,false);
 	m_t27Interval = SignallingTimer::getInterval(*config,"t27",ISUP_T27_MINVAL,ISUP_T27_DEFVAL,ISUP_T27_MAXVAL,false);
 	m_t34Interval = SignallingTimer::getInterval(*config,"t34",ISUP_T34_MINVAL,ISUP_T34_DEFVAL,ISUP_T34_MAXVAL,false);
     }
@@ -5017,6 +5051,15 @@ SignallingEvent* SS7ISUP::processCircuitEvent(SignallingCircuitEvent*& event,
 		msg->params().addParam("inband",event->getValue(YSTRING("inband"),String::boolText(true)));
 		ev = new SignallingEvent(SignallingEvent::Info,msg,call);
 		TelEngine::destruct(msg);
+	    }
+	    if (event->getValue(YSTRING("text"))) {
+		// Continuity Testing
+		if(event->getValue(YSTRING("text")) == "O") {
+		    SignallingMessage* msg = new SignallingMessage(event->c_str());
+		    ev = new SignallingEvent(SignallingEvent::ContinuitySuccessful,msg,call);
+		    TelEngine::destruct(msg);
+		}
+		// TODO: Fax detection etc.
 	    }
 	    break;
 	default:
