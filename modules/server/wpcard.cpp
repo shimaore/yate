@@ -1402,7 +1402,7 @@ bool WpCircuit::setupContinuityTest() {
     Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) attach tone_source=%p [%p]",code(),tone_source,this);
     if(!tone_source)
 	return false;
-    if(!tone_source->attach(m_consumer,true))
+    if(!DataTranslator::attachChain(tone_source,m_consumer,true))
 	return false;
     // Start detection of tone on m_consumer.
     // This will generate a "chan.masquerade", message = "chan.dtmf", "text" = "O", "detected"="inband"
@@ -1411,7 +1411,7 @@ bool WpCircuit::setupContinuityTest() {
     if(!tone_consumer)
 	return false;
     Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) tone_consumer=%p [%p]",code(),tone_consumer,this);
-    if(!m_source->attach(tone_consumer,true))
+    if(!DataTranslator::attachChain(m_source,tone_consumer,true))
 	return false;
     return true;
 }
