@@ -1837,51 +1837,7 @@ void WpSpan::run()
 	m_buffer = new unsigned char[m_bufferLen];
     }
     DDebug(m_group,DebugInfo,
-	"WpSpan('%s'). Worker is running: circuits=%u, buffer=%u, samples=%u [%p]",	wan_ec_api_t ecapi;
-	::memset(&ecapi,0,sizeof(ecapi));
-	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
-#ifdef HAVE_WANPIPE_HWEC_3310
-	ecapi.fe_chan_map = chanmap;
-#else
-	ecapi.channel_map = chanmap;
-#endif
-	if (enable) {
-	    ecapi.cmd = WAN_EC_CMD_DTMF_ENABLE;
-	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
-	    // event on start of tone, before echo canceller
-#ifdef NEW_WANPIPE_API
-	    ecapi.u_tone_config.type = WAN_EC_TONE_PRESENT;
-	    ecapi.u_tone_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
-#else
-	    ecapi.u_dtmf_config.type = WAN_EC_TONE_PRESENT;
-#ifdef HAVE_WANPIPE_HWEC_3310
-	    ecapi.u_dtmf_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
-#else
-	    ecapi.u_dtmf_config.port = WAN_EC_CHANNEL_PORT_SOUT;
-#endif
-#endif
-	}
-	else {
-	    ecapi.cmd = WAN_EC_CMD_DTMF_DISABLE;
-	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
-	    ecapi.u_tone_config.id = WP_API_EVENT_TONE_DTMF;
-#ifdef NEW_WANPIPE_API
-	    ecapi.u_tone_config.type = WAN_EC_TONE_STOP;
-	    ecapi.u_tone_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
-#else
-	    ecapi.u_dtmf_config.type = WAN_EC_TONE_STOP;
-#ifdef HAVE_WANPIPE_HWEC_3310
-	    ecapi.u_dtmf_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
-#else
-	    ecapi.u_dtmf_config.port = WAN_EC_CHANNEL_PORT_SOUT;
-#endif
-#endif
-	}
-	ecapi.err = WAN_EC_API_RC_OK;
-	if (::ioctl(fd,ecapi.cmd,&ecapi))
-	    operation = "IOCTL DTMF";
-
-
+	"WpSpan('%s'). Worker is running: circuits=%u, buffer=%u, samples=%u [%p]",
 	id().safe(),m_count,m_bufferLen,m_samples,this);
     updateStatus();
     while (true) {
