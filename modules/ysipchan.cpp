@@ -709,7 +709,8 @@ public:
     void regReq(SIPEvent* e, SIPTransaction* t);
     void regRun(const SIPMessage* message, SIPTransaction* t);
     void options(SIPEvent* e, SIPTransaction* t);
-    bool generic(SIPEvent* e, SIPTransaction* t);
+    bool generic(SIPEvent* e, SIPTransaction* t, int defErr = 405, bool async = false);
+    bool generic(const SIPMessage* message, SIPTransaction* t, const String& meth, bool autoAuth);
     bool buildParty(SIPMessage* message, const char* host = 0, int port = 0, const YateSIPLine* line = 0);
     inline void addTcpTransport(YateSIPTCPTransport* trans) {
 	    if (!trans)
@@ -830,6 +831,26 @@ private:
     YateSIPEndPoint* m_ep;
     RefPointer<SIPMessage> m_msg;
     RefPointer<SIPTransaction> m_tr;
+};
+
+class YateSIPGeneric : public Thread
+{
+public:
+    inline YateSIPGeneric(YateSIPEndPoint* ep, SIPMessage* message, SIPTransaction* t,
+	const char* method, int defErr, bool autoAuth)
+	: Thread("YSIP Generic"),
+	  m_ep(ep), m_msg(message), m_tr(t),
+	  m_method(method), m_error(defErr), m_auth(autoAuth)
+	{ }
+    virtual void run()
+	{ if (!m_ep->generic(m_msg,m_tr,m_method,m_auth)) m_tr->setResponse(m_error); }
+private:
+    YateSIPEndPoint* m_ep;
+    RefPointer<SIPMessage> m_msg;
+    RefPointer<SIPTransaction> m_tr;
+    String m_method;
+    int m_error;
+    bool m_auth;
 };
 
 class YateSIPConnection : public Channel, public SDPSession, public YateSIPPartyHolder
@@ -1010,9 +1031,9 @@ public:
 	: m_data(0), m_socket(sock)
 	{}
     virtual void* getObject(const String& name) const {
-	    if (name == YSTRING("DataBlock"))
+	    if (name == YATOM("DataBlock"))
 		return m_data;
-	    if (name == YSTRING("Socket*"))
+	    if (name == YATOM("Socket*"))
 		return (void*)m_socket;
 	    return RefObject::getObject(name);
 	}
@@ -1114,6 +1135,7 @@ static bool s_1xx_formats = true;
 static bool s_rtp_preserve = false;
 static bool s_auth_register = true;
 static bool s_reg_async = true;
+static bool s_gen_async = true;
 static bool s_multi_ringing = false;
 static bool s_refresh_nosdp = true;
 static bool s_update_target = false;
@@ -1802,11 +1824,11 @@ static MimeBody* doBuildSIPBody(const DebugEnabler* debug, Message& msg, MimeSdp
 	DataBlock* data = 0;
 	msg = "isup.encode";
 	if (Engine::dispatch(msg)) {
-	    NamedString* ns = msg.getParam(YSTRING("rawdata"));
+	    NamedString* ns = msg.getParam(YATOM("rawdata"));
 	    if (ns) {
-		NamedPointer* np = static_cast<NamedPointer*>(ns->getObject(YSTRING("NamedPointer")));
+		NamedPointer* np = static_cast<NamedPointer*>(ns->getObject(YATOM("NamedPointer")));
 		if (np)
-		    data = static_cast<DataBlock*>(np->userObject(YSTRING("DataBlock")));
+		    data = static_cast<DataBlock*>(np->userObject(YATOM("DataBlock")));
 	    }
 	}
 	if (data && data->length()) {
@@ -3700,9 +3722,9 @@ void* YateUDPParty::getTransport()
 // Get an object from this one
 void* YateUDPParty::getObject(const String& name) const
 {
-    if (name == YSTRING("YateUDPParty"))
+    if (name == YATOM("YateUDPParty"))
 	return (void*)this;
-    if (name == YSTRING("YateSIPUDPTransport") || name == YSTRING("YateSIPTransport"))
+    if (name == YATOM("YateSIPUDPTransport") || name == YATOM("YateSIPTransport"))
 	return m_transport;
     return SIPParty::getObject(name);
 }
@@ -3770,9 +3792,9 @@ void* YateTCPParty::getTransport()
 // Get an object from this one
 void* YateTCPParty::getObject(const String& name) const
 {
-    if (name == YSTRING("YateTCPParty"))
+    if (name == YATOM("YateTCPParty"))
 	return (void*)this;
-    if (name == YSTRING("YateSIPTCPTransport") || name == YSTRING("YateSIPTransport"))
+    if (name == YATOM("YateSIPTCPTransport") || name == YATOM("YateSIPTransport"))
 	return m_transport;
     return SIPParty::getObject(name);
 }
@@ -4591,21 +4613,23 @@ bool YateSIPEndPoint::incoming(SIPEvent* e, SIPTransaction* t)
 	    done = conn->doInfo(t);
 	    conn->deref();
 	    if (!done)
-		done = generic(e,t);
+		done = generic(e,t,415);
 	}
 	else if (t->getDialogTag()) {
 	    done = true;
 	    t->setResponse(481);
 	}
 	else
-	    done = generic(e,t);
+	    done = generic(e,t,415);
 	if (!done)
 	    t->setResponse(415);
     }
     else if (t->getMethod() == YSTRING("REGISTER"))
 	regReq(e,t);
-    else if (t->getMethod() == YSTRING("OPTIONS"))
-	options(e,t);
+    else if (t->getMethod() == YSTRING("OPTIONS")) {
+	if (!generic(e,t))
+	    options(e,t);
+    }
     else if (t->getMethod() == YSTRING("REFER")) {
 	YateSIPConnection* conn = plugin.findCall(t->getCallID(),true);
 	if (conn) {
@@ -4817,14 +4841,20 @@ void YateSIPEndPoint::options(SIPEvent* e, SIPTransaction* t)
 	    return;
 	}
     }
-    t->setResponse(200);
+    switch (Engine::accept()) {
+	case Engine::Congestion:
+	case Engine::Reject:
+	    t->setResponse(503);
+	    break;
+	default:
+	    t->setResponse(Engine::exiting() ? 503 : 200);
+    }
 }
 
-bool YateSIPEndPoint::generic(SIPEvent* e, SIPTransaction* t)
+bool YateSIPEndPoint::generic(SIPEvent* e, SIPTransaction* t, int defErr, bool async)
 {
     String meth(t->getMethod());
     meth.toLower();
-    String user;
     Lock mylock(s_globalMutex);
     const String* auth = s_cfg.getKey("methods",meth);
     if (!auth)
@@ -4832,12 +4862,24 @@ bool YateSIPEndPoint::generic(SIPEvent* e, SIPTransaction* t)
     bool autoAuth = auth->toBoolean(true);
     mylock.drop();
 
+    if (async || s_gen_async) {
+	YateSIPGeneric* gen = new YateSIPGeneric(this,e->getMessage(),t,meth,defErr,autoAuth);
+	if (gen->startup())
+	    return true;
+	Debug(&plugin,DebugWarn,"Failed to start generic thread");
+	delete gen;
+    }
+    return generic(e->getMessage(),t,meth,autoAuth);
+}
+
+bool YateSIPEndPoint::generic(const SIPMessage* message, SIPTransaction* t, const String& meth, bool autoAuth)
+{
     Message m("sip." + meth);
-    const SIPMessage* message = e->getMessage();
     String host;
     int portNum = 0;
     message->getParty()->getAddr(host,portNum,false);
     URI uri(message->uri);
+    String user;
     YateSIPLine* line = plugin.findLine(host,portNum,uri.getUser());
     if (line) {
 	// message comes from line we have registered to
@@ -5876,7 +5918,7 @@ bool YateSIPConnection::process(SIPEvent* ev)
 			parameters().addParam("divert_screen",tmp);
 		}
 	    }
-	    else
+	    else if (code != 387)
 		Debug(this,DebugMild,"Received %d redirect without Contact [%p]",code,this);
 	}
 	paramMutex().unlock();
@@ -7803,6 +7845,7 @@ bool SipHandler::received(Message &msg)
 		case BodyRaw:
 		    binBody.append(body);
 		    ok = true;
+		    break;
 		case BodyHex:
 		    ok = binBody.unHexify(body,body.length());
 		    break;
@@ -8096,6 +8139,7 @@ void SIPDriver::initialize()
     s_tcpMaxpkt = getMaxpkt(s_cfg.getIntValue("general","tcp_maxpkt",4096),4096);
     s_lineKeepTcpOffline = s_cfg.getBoolValue("general","line_keeptcpoffline",!Engine::clientMode());
     s_defEncoding = s_cfg.getIntValue("general","body_encoding",SipHandler::s_bodyEnc,SipHandler::BodyBase64);
+    s_gen_async = s_cfg.getBoolValue("general","async_generic",true);
     s_sipt_isup = s_cfg.getBoolValue("sip-t","isup",false);
     s_expires_min = s_cfg.getIntValue("registrar","expires_min",EXPIRES_MIN);
     s_expires_def = s_cfg.getIntValue("registrar","expires_def",EXPIRES_DEF);

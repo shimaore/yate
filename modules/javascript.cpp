@@ -28,8 +28,13 @@
 
 #define NATIVE_TITLE "[native code]"
 
+#define MIN_CALLBACK_INTERVAL Thread::idleMsec()
+
 using namespace TelEngine;
 namespace { // anonymous
+
+class JsEngineWorker;
+class JsEngine;
 
 class JsModule : public ChanAssistList
 {
@@ -154,14 +159,59 @@ protected:
     bool runNative(ObjList& stack, const ExpOperation& oper, GenObject* context);
 };
 
+class JsTimeEvent : public RefObject
+{
+public:
+    JsTimeEvent(JsEngineWorker* worker, const ExpFunction& callback, unsigned int interval,bool repeatable, unsigned int id);
+    void processTimeout(const Time& when);
+    inline bool repeatable() const
+	{ return m_repeat; }
+    inline u_int64_t fireTime() const
+	{ return m_fire; }
+    inline bool timeout(const Time& when) const
+	{ return when.msec() >= m_fire; }
+    inline unsigned int getId() const
+	{ return m_id; }
+private:
+    JsEngineWorker* m_worker;
+    ExpFunction m_callbackFunction;
+    unsigned int m_interval;
+    u_int64_t m_fire;
+    bool m_repeat;
+    unsigned int m_id;
+};
+
+class JsEngineWorker : public Thread
+{
+public:
+    JsEngineWorker(JsEngine* engine, ScriptContext* context, ScriptCode* code);
+    ~JsEngineWorker();
+    unsigned int addEvent(const ExpFunction& callback, unsigned int interval, bool repeat);
+    bool removeEvent(unsigned int id, bool repeatable);
+    ScriptContext* getContext();
+    ScriptCode* getCode();
+protected:
+    virtual void run();
+    void postponeEvent(JsTimeEvent* ev);
+private:
+    ObjList m_events;
+    Mutex m_eventsMutex;
+    unsigned int m_id;
+    ScriptContext* m_context;
+    ScriptCode* m_code;
+    JsEngine* m_engine;
+};
+
 #define MKDEBUG(lvl) params().addParam(new ExpOperation((long int)Debug ## lvl,"Debug" # lvl))
-class JsEngine : public JsObject
+class JsEngine : public JsObject, public DebugEnabler
 {
     YCLASS(JsEngine,JsObject)
 public:
     inline JsEngine(Mutex* mtx)
-	: JsObject("Engine",mtx,true)
+	: JsObject("Engine",mtx,true),
+	  m_worker(0), m_debugName("javascript")
 	{
+	    debugChain(&__plugin);
 	    MKDEBUG(Fail);
 	    MKDEBUG(Test);
 	    MKDEBUG(GoOn);
@@ -181,11 +231,22 @@ public:
 	    params().addParam(new ExpFunction("idle"));
 	    params().addParam(new ExpFunction("dump_r"));
 	    params().addParam(new ExpFunction("print_r"));
+	    params().addParam(new ExpFunction("debugName"));
 	    params().addParam(new ExpWrapper(new JsShared(mtx),"shared"));
+	    params().addParam(new ExpFunction("setInterval"));
+	    params().addParam(new ExpFunction("clearInterval"));
+	    params().addParam(new ExpFunction("setTimeout"));
+	    params().addParam(new ExpFunction("clearTimeout"));
 	}
     static void initialize(ScriptContext* context);
+    inline void resetWorker()
+	{ m_worker = 0; }
 protected:
     bool runNative(ObjList& stack, const ExpOperation& oper, GenObject* context);
+    virtual void destroyed();
+private:
+    JsEngineWorker* m_worker;
+    String m_debugName;
 };
 #undef MKDEBUG
 
@@ -222,6 +283,10 @@ public:
 	    if (Engine::exiting())
 		while (m_handlers.remove(false))
 		    ;
+	    for (ObjList* o = m_hooks.skipNull();o;o = o->skipNext()) {
+		MessageHook* hook = static_cast<MessageHook*>(o->get());
+		Engine::uninstallHook(hook);
+	    }
 	}
     virtual NamedList* nativeParams() const
 	{ return m_message; }
@@ -233,6 +298,8 @@ public:
 	{
 	    construct->params().addParam(new ExpFunction("install"));
 	    construct->params().addParam(new ExpFunction("uninstall"));
+	    construct->params().addParam(new ExpFunction("uninstallHook"));
+	    construct->params().addParam(new ExpFunction("installHook"));
 	    construct->params().addParam(new ExpFunction("trackName"));
 	}
     inline void clearMsg()
@@ -240,12 +307,15 @@ public:
     inline void setMsg(Message* message, bool owned = false)
 	{ m_message = message; m_owned = owned; }
     static void initialize(ScriptContext* context);
+    void runAsync(ObjList& stack, Message* msg);
 protected:
     bool runNative(ObjList& stack, const ExpOperation& oper, GenObject* context);
     void getColumn(ObjList& stack, const ExpOperation* col, GenObject* context);
     void getRow(ObjList& stack, const ExpOperation* row, GenObject* context);
     void getResult(ObjList& stack, const ExpOperation& row, const ExpOperation& col, GenObject* context);
+    bool installHook(ObjList& stack, const ExpOperation& oper, GenObject* context);
     ObjList m_handlers;
+    ObjList m_hooks;
     String m_trackName;
     Message* m_message;
     bool m_owned;
@@ -277,6 +347,41 @@ private:
     ExpFunction m_function;
     RefPointer<ScriptContext> m_context;
     RefPointer<ScriptCode> m_code;
+};
+
+class JsMessageQueue : public MessageQueue
+{
+    YCLASS(JsMessageQueue,MessageQueue)
+public:
+    inline JsMessageQueue(const ExpFunction* received,const char* name, unsigned threads, const ExpFunction* trap, unsigned trapLunch, GenObject* context)
+	: MessageQueue(name,threads), m_receivedFunction(0), m_trapFunction(0), m_trapLunch(trapLunch), m_trapCalled(false)
+	{
+	    ScriptRun* runner = YOBJECT(ScriptRun,context);
+	    if (runner) {
+		m_context = runner->context();
+		m_code = runner->code();
+	    }
+	    if (received)
+		m_receivedFunction = new ExpFunction(received->name(),1);
+	    if (trap)
+		m_trapFunction = new ExpFunction(trap->name(),0);
+	}
+    virtual ~JsMessageQueue()
+    {
+	TelEngine::destruct(m_receivedFunction);
+	TelEngine::destruct(m_trapFunction);
+    }
+    virtual bool enqueue(Message* msg);
+    bool matchesFilters(const NamedList& filters);
+protected:
+    virtual void received(Message& msg);
+private:
+    ExpFunction* m_receivedFunction;
+    ExpFunction* m_trapFunction;
+    RefPointer<ScriptContext> m_context;
+    RefPointer<ScriptCode> m_code;
+    unsigned int m_trapLunch;
+    bool m_trapCalled;
 };
 
 class JsFile : public JsObject
@@ -407,6 +512,22 @@ private:
     long int m_val;
 };
 
+class JsMsgAsync : public ScriptAsync
+{
+    YCLASS(JsMsgAsync,ScriptAsync)
+public:
+    inline JsMsgAsync(ScriptRun* runner, ObjList* stack, JsMessage* jsMsg, Message* msg)
+	: ScriptAsync(runner),
+	  m_stack(stack), m_msg(jsMsg), m_message(msg)
+	{ XDebug(DebugAll,"JsMsgAsync"); }
+    virtual bool run()
+	{ m_msg->runAsync(*m_stack,m_message); return true; }
+private:
+    ObjList* m_stack;
+    RefPointer<JsMessage> m_msg;
+    Message* m_message;
+};
+
 static String s_basePath;
 static bool s_engineStop = false;
 static bool s_allowAbort = false;
@@ -482,7 +603,7 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 		level = DebugAll;
 	    else if (level < limit)
 		level = limit;
-	    Debug(&__plugin,level,"%s",str.c_str());
+	    Debug(this,level,"%s",str.c_str());
 	}
     }
     else if (oper.name() == YSTRING("sleep")) {
@@ -573,9 +694,75 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	else
 	    return false;
     }
+    else if (oper.name() == YSTRING("debugName")) {
+	if (oper.number() == 0)
+	    ExpEvaluator::pushOne(stack,new ExpOperation(m_debugName));
+	else if (oper.number() == 1) {
+	    ExpOperation* op = popValue(stack,context);
+	    String tmp;
+	    if (op && !JsParser::isNull(*op))
+		tmp = *op;
+	    TelEngine::destruct(op);
+	    tmp.trimSpaces();
+	    if (tmp.null())
+		tmp = "javascript";
+	    m_debugName = tmp;
+	    debugName(m_debugName);
+	}
+	else
+	    return false;
+    }
+    else if (oper.name() == YSTRING("setInterval") || oper.name() == YSTRING("setTimeout")) {
+	ObjList args;
+	if (extractArgs(stack,oper,context,args) < 2)
+	    return false;
+	const ExpFunction* callback = YOBJECT(ExpFunction,args[0]);
+	if (!callback) {
+	    JsFunction* jsf = YOBJECT(JsFunction,args[0]);
+	    if (jsf)
+		callback = jsf->getFunc();
+	}
+	if (!callback)
+	    return false;
+	ExpOperation* interval = static_cast<ExpOperation*>(args[1]);
+	if (!m_worker) {
+	    ScriptRun* runner = YOBJECT(ScriptRun,context);
+	    if (!runner)
+		return false;
+	    ScriptContext* scontext = runner->context();
+	    ScriptCode* scode = runner->code();
+	    if (!(scontext && scode))
+		return false;
+	    m_worker = new JsEngineWorker(this,scontext,scode);
+	    m_worker->startup();
+	}
+	unsigned int id = m_worker->addEvent(*callback,interval->toInteger(),
+		oper.name() == YSTRING("setInterval"));
+	ExpEvaluator::pushOne(stack,new ExpOperation((long int)id));
+    }
+    else if (oper.name() == YSTRING("clearInterval") || oper.name() == YSTRING("clearTimeout")) {
+	if (!m_worker)
+	    return false;
+	ObjList args;
+	if (!extractArgs(stack,oper,context,args))
+	    return false;
+	ExpOperation* id = static_cast<ExpOperation*>(args[0]);
+	bool ret = m_worker->removeEvent(id->valInteger(),oper.name() == YSTRING("clearInterval"));
+	ExpEvaluator::pushOne(stack,new ExpOperation(ret));
+    }
     else
 	return JsObject::runNative(stack,oper,context);
     return true;
+}
+
+void JsEngine::destroyed()
+{
+    JsObject::destroyed();
+    if (!m_worker)
+	return;
+    m_worker->cancel();
+    while (m_worker)
+	Thread::idle();
 }
 
 void JsEngine::initialize(ScriptContext* context)
@@ -780,12 +967,23 @@ bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* c
 	ExpEvaluator::pushOne(stack,new ExpOperation(ok));
     }
     else if (oper.name() == YSTRING("dispatch")) {
-	if (oper.number() != 0)
+	if (oper.number() > 1)
 	    return false;
+	ObjList args;
+	extractArgs(stack,oper,context,args);
 	bool ok = false;
 	if (m_owned && m_message) {
 	    Message* m = m_message;
 	    clearMsg();
+	    ExpOperation* async = static_cast<ExpOperation*>(args[0]);
+	    if (async && async->valBoolean()) {
+		ScriptRun* runner = YOBJECT(ScriptRun,context);
+		if (!runner)
+		    return false;
+		runner->insertAsync(new JsMsgAsync(runner,&stack,this,m));
+		runner->pause();
+		return true;
+	    }
 	    ok = Engine::dispatch(*m);
 	    m_message = m;
 	    m_owned = true;
@@ -845,6 +1043,30 @@ bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* c
 	    return false;
 	m_handlers.remove(*name);
     }
+    else if (oper.name() == YSTRING("installHook"))
+	return installHook(stack,oper,context);
+    else if (oper.name() == YSTRING("uninstallHook")) {
+	ObjList args;
+	if (extractArgs(stack,oper,context,args) < 1)
+	    return false;
+	ObjList* o = args.skipNull();
+	ExpOperation* name = static_cast<ExpOperation*>(o->get());
+	NamedList hook(*name);
+	for (;o;o = o->skipNext()) {
+	    ExpOperation* filter = static_cast<ExpOperation*>(o->get());
+	    ObjList* pair = filter->split('=',false);
+	    if (pair->count() == 2)
+		hook.addParam(*(static_cast<String*>((*pair)[0])), *(static_cast<String*>((*pair)[1])));
+	    TelEngine::destruct(pair);
+	}
+	for (o = m_hooks.skipNull();o;o = o->skipNext()) {
+	    JsMessageQueue* queue = static_cast<JsMessageQueue*>(o->get());
+	    if (!queue->matchesFilters(hook))
+		continue;
+	    Engine::uninstallHook(queue);
+	    m_hooks.remove(queue);
+	}
+    }
     else if (oper.name() == YSTRING("trackName")) {
 	ObjList args;
 	switch (extractArgs(stack,oper,context,args)) {
@@ -873,6 +1095,78 @@ bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* c
     else
 	return JsObject::runNative(stack,oper,context);
     return true;
+}
+
+void JsMessage::runAsync(ObjList& stack, Message* msg)
+{
+    bool ok = Engine::dispatch(*msg);
+    if ((m_message || m_owned) && (msg != m_message))
+	Debug(&__plugin,DebugWarn,"Message replaced while async dispatching!");
+    else {
+	m_message = msg;
+	m_owned = true;
+    }
+    ExpEvaluator::pushOne(stack,new ExpOperation(ok));
+}
+
+bool JsMessage::installHook(ObjList& stack, const ExpOperation& oper, GenObject* context)
+{
+    ObjList args;
+    unsigned int argsCount = extractArgs(stack,oper,context,args);
+    if (argsCount < 2)
+	return false;
+    ObjList* o = args.skipNull();
+    const ExpFunction* receivedFunc = YOBJECT(ExpFunction,o->get());
+    if (!receivedFunc) {
+	JsFunction* jsf = YOBJECT(JsFunction,o->get());
+	if (jsf)
+	    receivedFunc = jsf->getFunc();
+    }
+    if (receivedFunc) {
+	if (argsCount < 3)
+	    return false;
+	o = o->skipNext();
+    }
+    ExpOperation* name = static_cast<ExpOperation*>(o->get());
+    if (TelEngine::null(name))
+	return false;
+    o = o->skipNext();
+    ExpOperation* threads = static_cast<ExpOperation*>(o->get());
+    int threadsCount = threads->toInteger(-1);
+    if (threadsCount < 1)
+	return false;
+    o = o->skipNext();
+    const ExpFunction* trapFunction = 0;
+    int trapLunch = 0;
+    while (o) {
+	trapFunction = YOBJECT(ExpFunction,o->get());
+	if (!trapFunction) {
+	    JsFunction* jsf = YOBJECT(JsFunction,o->get());
+	    if (jsf)
+		trapFunction = jsf->getFunc();
+	}
+	if (!trapFunction)
+	    break;
+	o = o->skipNext();
+	if (!o)
+	    return false;
+	ExpOperation* trap = static_cast<ExpOperation*>(o->get());
+	trapLunch = trap->toInteger(-1);
+	if (trapLunch < 0)
+	    return false;
+	o = o->skipNext();
+    }
+    JsMessageQueue* msgQueue = new JsMessageQueue(receivedFunc,*name,threadsCount,trapFunction,trapLunch,context);
+    for (;o;o = o->skipNext()) {
+	ExpOperation* filter = static_cast<ExpOperation*>(o->get());
+	ObjList* pair = filter->split('=',false);
+	if (pair->count() == 2)
+	    msgQueue->addFilter(*(static_cast<String*>((*pair)[0])), *(static_cast<String*>((*pair)[1])));
+	TelEngine::destruct(pair);
+    }
+    msgQueue->ref();
+    m_hooks.append(msgQueue);
+    return Engine::installHook(msgQueue);
 }
 
 void JsMessage::getColumn(ObjList& stack, const ExpOperation* col, GenObject* context)
@@ -1086,6 +1380,65 @@ bool JsHandler::received(Message& msg)
     return ok;
 }
 
+void JsMessageQueue::received(Message& msg)
+{
+    if (s_engineStop || !m_code)
+	return;
+    if (!m_receivedFunction) {
+	MessageQueue::received(msg);
+	return;
+    }
+    ScriptRun* runner = m_code->createRunner(m_context,NATIVE_TITLE);
+    if (!runner)
+	return;
+    JsMessage* jm = new JsMessage(&msg,runner->context()->mutex(),false);
+    jm->ref();
+    ObjList args;
+    args.append(new ExpWrapper(jm,"message"));
+    runner->call(m_receivedFunction->name(),args);
+    jm->clearMsg();
+    TelEngine::destruct(jm);
+    TelEngine::destruct(runner);
+}
+
+bool JsMessageQueue::enqueue(Message* msg)
+{
+    if (!count())
+	m_trapCalled = false;
+    bool ret = MessageQueue::enqueue(msg);
+    if (!ret || !m_trapLunch || !m_trapFunction || m_trapCalled || count() < m_trapLunch)
+	return ret;
+    if (s_engineStop || !m_code)
+	return ret;
+
+    ScriptRun* runner = m_code->createRunner(m_context,NATIVE_TITLE);
+    if (!runner)
+	return ret;
+    ObjList args;
+    runner->call(m_trapFunction->name(),args);
+    TelEngine::destruct(runner);
+    m_trapCalled = true;
+    return ret;
+}
+
+bool JsMessageQueue::matchesFilters(const NamedList& filters)
+{
+    const NamedList origFilters = getFilters();
+    if (origFilters != filters)
+	return false;
+    unsigned int ofCount = origFilters.count(), fcount = filters.count();
+    if (ofCount != fcount)
+	return false;
+    if (!ofCount)
+	return true;
+    for (unsigned int i = 0;i < origFilters.length();i++) {
+	NamedString* param = origFilters.getParam(i);
+	NamedString* secParam = filters.getParam(*param);
+	if (!secParam || *secParam != *param)
+	    return false;
+    }
+    return true;
+}
 
 bool JsFile::runNative(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {
@@ -1475,6 +1828,138 @@ void JsXML::initialize(ScriptContext* context)
 	addConstructor(params,"XML",new JsXML(mtx));
 }
 
+/**
+ * class JsTimeEvent
+ */
+
+JsTimeEvent::JsTimeEvent(JsEngineWorker* worker, const ExpFunction& callback,
+	unsigned int interval,bool repeatable, unsigned int id)
+    : m_worker(worker), m_callbackFunction(callback.name(),1),
+    m_interval(interval), m_repeat(repeatable), m_id(id)
+{
+    XDebug(&__plugin,DebugAll,"Created new JsTimeEvent(%u,%s) [%p]",interval,
+	   String::boolText(repeatable),this);
+    m_fire = Time::msecNow() + m_interval;
+}
+
+void JsTimeEvent::processTimeout(const Time& when)
+{
+    if (m_repeat)
+	m_fire = when.msec() + m_interval;
+    ScriptCode* code = m_worker->getCode();
+    ScriptContext* context = m_worker->getContext();
+    while (code && context) {
+	ScriptRun* runner = code->createRunner(context,NATIVE_TITLE);
+	if (!runner)
+	    break;
+	ObjList args;
+	runner->call(m_callbackFunction.name(),args);
+	TelEngine::destruct(runner);
+	break;
+    }
+    TelEngine::destruct(code);
+    TelEngine::destruct(context);
+}
+
+/**
+ * class JsEngineWorker
+ */
+
+JsEngineWorker::JsEngineWorker(JsEngine* engine, ScriptContext* context, ScriptCode* code)
+    : Thread("JsScheduler"), m_eventsMutex(false,"JsEngine"), m_id(0), m_context(context), m_code(code),
+    m_engine(engine)
+{
+    DDebug(&__plugin,DebugAll,"Creating JsEngineWorker [%p]",this);
+}
+
+JsEngineWorker::~JsEngineWorker()
+{
+    DDebug(&__plugin,DebugAll,"Destroing JsEngineWorker [%p]",this);
+    if (m_engine)
+	m_engine->resetWorker();
+}
+
+unsigned int JsEngineWorker::addEvent(const ExpFunction& callback, unsigned int interval, bool repeat)
+{
+    Lock myLock(m_eventsMutex);
+    if (interval < MIN_CALLBACK_INTERVAL)
+	interval = MIN_CALLBACK_INTERVAL;
+    // TODO find a better way to generate the id's
+    postponeEvent(new JsTimeEvent(this,callback,interval,repeat,++m_id));
+    return m_id;
+}
+
+bool JsEngineWorker::removeEvent(unsigned int id, bool repeatable)
+{
+    Lock myLock(m_eventsMutex);
+    for (ObjList* o = m_events.skipNull();o ; o = o->skipNext()) {
+	JsTimeEvent* ev = static_cast<JsTimeEvent*>(o->get());
+	if (ev->getId() != id)
+	    continue;
+	if (ev->repeatable() != repeatable)
+	    return false;
+	o->remove();
+	return true;
+    }
+    return false;
+}
+
+void JsEngineWorker::run()
+{
+    while (true) {
+	Time t;
+	Lock myLock(m_eventsMutex);
+	ObjList* o = m_events.skipNull();
+	if (!o) {
+	    myLock.drop();
+	    Thread::idle(true);
+	    continue;
+	}
+	RefPointer<JsTimeEvent> ev = static_cast<JsTimeEvent*>(o->get());
+	myLock.drop();
+	if (!ev->timeout(t)) {
+	    Thread::idle(true);
+	    continue;
+	}
+	ev->processTimeout(t);
+	if (!ev->repeatable()) {
+	    myLock.acquire(m_eventsMutex);
+	    m_events.remove(ev);
+	    continue;
+	}
+	myLock.acquire(m_eventsMutex);
+	if (m_events.remove(ev,false))
+	    postponeEvent(ev);
+    }
+}
+
+void JsEngineWorker::postponeEvent(JsTimeEvent* evnt)
+{
+    if (!evnt)
+	return;
+    for (ObjList* o = m_events.skipNull();o;o = o->skipNext()) {
+	JsTimeEvent* ev = static_cast<JsTimeEvent*>(o->get());
+	if (ev->fireTime() <= evnt->fireTime())
+	    continue;
+	o->insert(evnt);
+	return;
+    }
+    m_events.append(evnt);
+}
+
+ScriptCode* JsEngineWorker::getCode()
+{
+    if (m_code && m_code->ref())
+	return m_code;
+    return 0;
+}
+
+ScriptContext* JsEngineWorker::getContext()
+{
+    if (m_context && m_context->ref())
+	return m_context;
+    return 0;
+}
 
 bool JsChannel::runNative(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {

@@ -201,8 +201,10 @@ namespace TelEngine {
 
 #ifdef HAVE_BLOCK_RETURN
 #define YSTRING(s) (*({static const String str(s);&str;}))
+#define YATOM(s) (*({static const String* str(0);str ? str : String::atom(str,s);}))
 #else
 #define YSTRING(s) (s)
+#define YATOM(s) (s)
 #endif
 
 #define YSTRING_INIT_HASH ((unsigned) -1)
@@ -510,6 +512,8 @@ public:
 	Absolute,  // from EPOCH (1-1-1970)
 	Textual,   // absolute GMT in YYYYMMDDhhmmss.uuuuuu format
 	TextLocal, // local time in YYYYMMDDhhmmss.uuuuuu format
+	TextSep,   // absolute GMT in YYYY-MM-DD_hh:mm:ss.uuuuuu format
+	TextLSep,  // local time in YYYY-MM-DD_hh:mm:ss.uuuuuu format
     };
 
     /**
@@ -604,6 +608,13 @@ class Mutex;
 constant YSTRING(const char* string);
 
 /**
+ * Macro to create a shared static String if supported by compiler, use with caution
+ * @param string Literal constant string
+ * @return A const String& if supported, literal string if not supported
+ */
+constant YATOM(const char* string);
+
+/**
  * Macro to create a GenObject class from a base class and implement @ref GenObject::getObject
  * @param type Class that is declared
  * @param base Base class that is inherited
@@ -668,17 +679,17 @@ void YNOCOPY(class type);
 
 #define YCLASS(type,base) \
 public: virtual void* getObject(const String& name) const \
-{ return (name == YSTRING(#type)) ? const_cast<type*>(this) : base::getObject(name); }
+{ return (name == YATOM(#type)) ? const_cast<type*>(this) : base::getObject(name); }
 
 #define YCLASS2(type,base1,base2) \
 public: virtual void* getObject(const String& name) const \
-{ if (name == YSTRING(#type)) return const_cast<type*>(this); \
+{ if (name == YATOM(#type)) return const_cast<type*>(this); \
   void* tmp = base1::getObject(name); \
   return tmp ? tmp : base2::getObject(name); }
 
 #define YCLASS3(type,base1,base2,base3) \
 public: virtual void* getObject(const String& name) const \
-{ if (name == YSTRING(#type)) return const_cast<type*>(this); \
+{ if (name == YATOM(#type)) return const_cast<type*>(this); \
   void* tmp = base1::getObject(name); \
   if (tmp) return tmp; \
   tmp = base2::getObject(name); \
@@ -686,23 +697,23 @@ public: virtual void* getObject(const String& name) const \
 
 #define YCLASSIMP(type,base) \
 void* type::getObject(const String& name) const \
-{ return (name == YSTRING(#type)) ? const_cast<type*>(this) : base::getObject(name); }
+{ return (name == YATOM(#type)) ? const_cast<type*>(this) : base::getObject(name); }
 
 #define YCLASSIMP2(type,base1,base2) \
 void* type::getObject(const String& name) const \
-{ if (name == YSTRING(#type)) return const_cast<type*>(this); \
+{ if (name == YATOM(#type)) return const_cast<type*>(this); \
   void* tmp = base1::getObject(name); \
   return tmp ? tmp : base2::getObject(name); }
 
 #define YCLASSIMP3(type,base1,base2,base3) \
 void* type::getObject(const String& name) const \
-{ if (name == YSTRING(#type)) return const_cast<type*>(this); \
+{ if (name == YATOM(#type)) return const_cast<type*>(this); \
   void* tmp = base1::getObject(name); \
   if (tmp) return tmp; \
   tmp = base2::getObject(name); \
   return tmp ? tmp : base3::getObject(name); }
 
-#define YOBJECT(type,pntr) (static_cast<type*>(GenObject::getObject(YSTRING(#type),pntr)))
+#define YOBJECT(type,pntr) (static_cast<type*>(GenObject::getObject(YATOM(#type),pntr)))
 
 #define YNOCOPY(type) private: \
 type(const type&); \
@@ -1234,6 +1245,11 @@ public:
     void clear();
 
     /**
+     * Remove all empty objects in the list
+     */
+    void compact();
+
+    /**
      * Get the automatic delete flag
      * @return True if will delete on destruct, false otherwise
      */
@@ -1327,6 +1343,12 @@ public:
      * @return Count of items
      */
     unsigned int count() const;
+
+    /**
+     * Check if the vector is empty
+     * @return True if the vector contains no objects
+     */
+    bool null() const;
 
     /**
      * Get the object at a specific index in vector
@@ -1537,6 +1559,97 @@ class Regexp;
 class StringMatchPrivate;
 
 /**
+ * A simple class to hold a single Unicode character and convert it to / from UTF-8
+ * @short A single Unicode character
+ */
+class YATE_API UChar
+{
+public:
+    /**
+     * Constructor from unsigned numeric code
+     * @param code Code of the Unicode character
+     */
+    inline explicit UChar(unsigned int code = 0)
+	: m_chr(code)
+	{ encode(); }
+
+    /**
+     * Constructor from signed numeric code
+     * @param code Code of the Unicode character
+     */
+    inline explicit UChar(signed int code)
+	: m_chr((code < 0) ? 0 : code)
+	{ encode(); }
+
+    /**
+     * Constructor from signed character
+     * @param code Character to construct from
+     */
+    inline explicit UChar(signed char code)
+	: m_chr((unsigned char)code)
+	{ encode(); }
+
+    /**
+     * Constructor from unsigned character
+     * @param code Character to construct from
+     */
+    inline explicit UChar(unsigned char code)
+	: m_chr(code)
+	{ encode(); }
+
+    /**
+     * Assignment operator from a character code
+     * @param code Character code to assign
+     * @return Reference to this object
+     */
+    inline UChar& operator=(unsigned int code)
+	{ m_chr = code; encode(); return *this; }
+
+    /**
+     * Assignment operator from a character
+     * @param code Character to assign
+     * @return Reference to this object
+     */
+    inline UChar& operator=(char code)
+	{ m_chr = (unsigned char)code; encode(); return *this; }
+
+    /**
+     * Get the Unicode value of the character
+     * @return Code of the character as defined by Unicode
+     */
+    inline unsigned int code() const
+	{ return m_chr; }
+
+    /**
+     * Get the value of the character as UTF-8 string.
+     * @return The character as UTF-8 C string
+     */
+    inline const char* c_str() const
+	{ return m_str; }
+
+    /**
+     * Conversion to "const char *" operator.
+     * @return Pointer to the internally stored UTF-8 string
+     */
+    inline operator const char*() const
+	{ return m_str; };
+
+    /**
+     * Decode the first Unicode character from an UTF-8 C string
+     * @param str String to extract from, will be advanced past the character
+     * @param maxChar Maximum accepted Unicode character code
+     * @param overlong Accept overlong UTF-8 sequences (dangerous!)
+     * @return True if an Unicode character was decoded from string
+     */
+    bool decode(const char*& str, unsigned int maxChar = 0x10ffff, bool overlong = false);
+
+private:
+    void encode();
+    u_int32_t m_chr;
+    char m_str[8];
+};
+
+/**
  * A simple string handling class for C style (one byte) strings.
  * For simplicity and read speed no copy-on-write is performed.
  * Strings have hash capabilities and comparations are using the hash
@@ -1660,30 +1773,30 @@ public:
     /**
      * Get the number of characters in a string assuming UTF-8 encoding
      * @param value C string to compute Unicode length
-     * @param maxSeq Maximum accepted UTF-8 sequence length
+     * @param maxChar Maximum accepted Unicode character code
      * @param overlong Accept overlong UTF-8 sequences (dangerous!)
      * @return Count of Unicode characters, -1 if not valid UTF-8
      */
-    static int lenUtf8(const char* value, unsigned int maxSeq = 4, bool overlong = false);
+    static int lenUtf8(const char* value, unsigned int maxChar = 0x10ffff, bool overlong = false);
 
     /**
      * Get the number of characters in the string assuming UTF-8 encoding
-     * @param maxSeq Maximum accepted UTF-8 sequence length
+     * @param maxChar Maximum accepted Unicode character code
      * @param overlong Accept overlong UTF-8 sequences (dangerous!)
      * @return Count of Unicode characters, -1 if not valid UTF-8
      */
-    inline int lenUtf8(unsigned int maxSeq = 4, bool overlong = false) const
-	{ return lenUtf8(m_string,maxSeq,overlong); }
+    inline int lenUtf8(unsigned int maxChar = 0x10ffff, bool overlong = false) const
+	{ return lenUtf8(m_string,maxChar,overlong); }
 
 
     /**
      * Fix an UTF-8 encoded string by replacing invalid sequences
      * @param replace String to replace invalid sequences, use U+FFFD if null
-     * @param maxSeq Maximum accepted UTF-8 sequence length
+     * @param maxChar Maximum accepted Unicode character code
      * @param overlong Accept overlong UTF-8 sequences (dangerous!)
      * @return Count of invalid UTF-8 sequences that were replaced
      */
-    int fixUtf8(const char* replace = 0, unsigned int maxSeq = 4, bool overlong = false);
+    int fixUtf8(const char* replace = 0, unsigned int maxChar = 0x10ffff, bool overlong = false);
 
     /**
      * Check if a string starts with UTF-8 Byte Order Mark
@@ -1975,12 +2088,14 @@ public:
     /**
      * Fast equality operator.
      */
-    bool operator==(const String& value) const;
+    inline bool operator==(const String& value) const
+	{ return (this == &value) || ((hash() == value.hash()) && operator==(value.c_str())); }
 
     /**
      * Fast inequality operator.
      */
-    bool operator!=(const String& value) const;
+    inline bool operator!=(const String& value) const
+	{ return (this != &value) && ((hash() != value.hash()) || operator!=(value.c_str())); }
 
     /**
      * Case-insensitive equality operator.
@@ -2032,6 +2147,11 @@ public:
      * Stream style extraction operator for single characters
      */
     String& operator>>(char& store);
+
+    /**
+     * Stream style extraction operator for single Unicode characters
+     */
+    String& operator>>(UChar& store);
 
     /**
      * Stream style extraction operator for integers
@@ -2327,6 +2447,14 @@ public:
     inline String uriUnescape(int* errptr = 0) const
 	{ return uriUnescape(c_str(),errptr); }
 
+    /**
+     * Atom string support helper
+     * @param str Reference to variable to hold the atom string
+     * @param val String value to allocate to the atom
+     * @return Pointer to shared atom string
+     */
+    static const String* atom(const String*& str, const char* val);
+
 protected:
     /**
      * Called whenever the value changed (except in constructors).
@@ -2529,6 +2657,39 @@ private:
     bool matches(const char* value, StringMatchPrivate* matchlist) const;
     mutable void* m_regexp;
     int m_flags;
+};
+
+/**
+ * Indirected shared string offering access to atom strings
+ * @short Atom string holder
+ */
+class Atom
+{
+public:
+    /**
+     * Constructor
+     * @param value Atom's string value
+     */
+    inline explicit Atom(const char* value)
+	: m_atom(0)
+	{ String::atom(m_atom,value); }
+
+    /**
+     * Conversion to "const String &" operator
+     * @return Pointer to the atom String
+     */
+    inline operator const String&() const
+	{ return *m_atom; }
+
+    /**
+     * String method call operator
+     * @return Pointer to the atom String
+     */
+    inline const String* operator->() const
+	{ return m_atom; }
+
+private:
+    const String* m_atom;
 };
 
 /**
@@ -2812,6 +2973,14 @@ public:
     ObjList* find(const GenObject* obj) const;
 
     /**
+     * Get the item in the list that holds an object
+     * @param obj Pointer to the object to search for
+     * @param hash Object hash used to identify the list it belongs to
+     * @return Pointer to the found item or NULL
+     */
+    ObjList* find(const GenObject* obj, unsigned int hash) const;
+
+    /**
      * Get the item in the list that holds an object by String value
      * @param str String value (toString) of the object to search for
      * @return Pointer to the first found item or NULL
@@ -2954,6 +3123,7 @@ private:
     ObjList* m_objList;
     HashList* m_hashList;
     GenObject** m_objects;
+    unsigned int* m_hashes;
     unsigned int m_length;
     unsigned int m_current;
 };
@@ -3120,10 +3290,12 @@ public:
      * @param hour The hour component of the time (0 to 23)
      * @param minute The minute component of the time (0 to 59)
      * @param sec The seconds component of the time (0 to 59)
+     * @param wDay The day of the week (optional)
      * @return True on succes, false if conversion failed
      */
     static bool toDateTime(unsigned int epochTimeSec, int& year, unsigned int& month,
-	unsigned int& day, unsigned int& hour, unsigned int& minute, unsigned int& sec);
+	unsigned int& day, unsigned int& hour, unsigned int& minute, unsigned int& sec,
+	unsigned int* wDay = 0);
 
     /**
      * Check if an year is a leap one
@@ -3132,6 +3304,12 @@ public:
      */
     static inline bool isLeap(unsigned int year)
 	{ return (year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)); }
+
+    /**
+     * Retrieve the difference between local time and UTC in seconds east of UTC
+     * @return Difference between local time and UTC in seconds
+     */
+    static int timeZone();
 
 private:
     u_int64_t m_time;
@@ -5881,6 +6059,30 @@ public:
      */
     inline bool connect(const SocketAddr& addr)
 	{ return connect(addr.address(), addr.length()); }
+
+    /**
+     * Asynchronously connects the socket to a remote address.
+     * The socket must be selectable and in non-blocking operation mode
+     * @param addr Address to connect to
+     * @param addrlen Length of the address structure
+     * @param toutUs Timeout interval in microseconds
+     * @param timeout Optional boolean flag to signal timeout
+     * @return True on success
+     */
+    virtual bool connectAsync(struct sockaddr* addr, socklen_t addrlen, unsigned int toutUs,
+	bool* timeout = 0);
+
+    /**
+     * Asynchronously connects the socket to a remote address.
+     * The socket must be selectable and in non-blocking operation mode
+     * @param addr Socket address to connect to
+     * @param toutUs Timeout interval in microseconds
+     * @param timeout Optional boolean flag to signal timeout
+     * @return True on success
+     */
+    inline bool connectAsync(const SocketAddr& addr, unsigned int toutUs,
+	bool* timeout = 0)
+	{ return connectAsync(addr.address(),addr.length(),toutUs,timeout); }
 
     /**
      * Shut down one or both directions of a full-duplex socket.

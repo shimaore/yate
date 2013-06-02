@@ -660,7 +660,7 @@ public:
  * No new methods are provided - we only need the multiple inheritance.
  * @short Post-dispatching message hook that can be added to a list
  */
-class YATE_API MessagePostHook : public GenObject, public MessageNotifier
+class YATE_API MessagePostHook : public RefObject, public MessageNotifier
 {
 };
 
@@ -752,7 +752,7 @@ public:
      * Clear all the message handlers and post-dispatch hooks
      */
     inline void clear()
-	{ m_handlers.clear(); m_hooks.clear(); }
+	{ m_handlers.clear(); m_hookAppend = &m_hooks; m_hooks.clear(); }
 
     /**
      * Get the number of messages waiting in the queue
@@ -765,6 +765,12 @@ public:
      * @return Count of handlers
      */
     unsigned int handlerCount();
+
+    /**
+     * Get the number of post-handling hooks in this dispatcher
+     * @return Count of hooks
+     */
+    unsigned int postHookCount();
 
     /**
      * Install or remove a hook to catch messages after being dispatched
@@ -785,10 +791,139 @@ private:
     ObjList m_handlers;
     ObjList m_messages;
     ObjList m_hooks;
+    Mutex m_hookMutex;
+    ObjList* m_msgAppend;
+    ObjList* m_hookAppend;
     String m_trackParam;
     unsigned int m_changes;
     u_int64_t m_warnTime;
+    int m_hookCount;
+    bool m_hookHole;
 };
+
+/**
+ * Abstract class for message hook
+ * @short Abstract message hook
+ */
+class YATE_API MessageHook : public RefObject
+{
+public:
+    /**
+     * Try to enqueue a message to this hook's queue
+     * @param msg The message to enqueue
+     * @return True if the message was enqueued.
+     */
+    virtual bool enqueue(Message* msg) = 0;
+
+    /**
+     * Clear this hook data
+     */
+    virtual void clear() = 0;
+
+    /**
+     * Check if the given message can be inserted in this queue
+     * @param msg The message to check
+     * @return True if the message can be inserted in this queue
+     */
+    virtual bool matchesFilter(const Message& msg) = 0;
+};
+
+
+/**
+ * MessageQueue class allows to create a private queue for a message who matches
+ * the specified filters.
+ * @short A message queue
+ */
+class YATE_API MessageQueue : public MessageHook, public Mutex
+{
+    friend class Engine;
+public:
+    /**
+     * Creates a new message queue.
+     * @param hookName Name of the message served by this queue
+     * @param numWorkers The number of workers who serve this queue
+     */
+    MessageQueue(const char* hookName, int numWorkers = 0);
+
+    /**
+     * Destroys the message queue
+     */
+    ~MessageQueue();
+
+    /**
+     * Append a message in the queue
+     * @param msg The message to enqueue, will be destroyed after the processing is done
+     * @return True if successfully queued, false otherwise
+     */
+    virtual bool enqueue(Message* msg);
+
+    /**
+     * Process a message from the waiting queue
+     * @return False if the message queue is empty
+     */
+    bool dequeue();
+
+    /**
+     * Add a new filter to this queue
+     * @param name The filter name
+     * @param value The filter value
+     */
+    void addFilter(const char* name, const char* value);
+
+    /**
+     * Remove a filter form this queue
+     * @param name The filter name
+     */
+    void removeFilter(const String& name);
+
+    /**
+     * Clear private data
+     */
+    virtual void clear();
+
+    /**
+     * Remove a thread from workers list
+     * @param thread The thread to remove
+     */
+    void removeThread(Thread* thread);
+
+    /**
+     * Helper method to obtain the number of unprocessed messages in the queue
+     * @return The number of queued messages.
+     */
+    inline unsigned int count() const
+	{ return m_count; }
+
+    /**
+     * Obtain the filter list for this queue
+     * @return The filter list
+     */
+    inline const NamedList& getFilters() const
+	{ return m_filters; }
+
+    /**
+     * Check if the given message can be inserted in this queue
+     * @param msg The message to check
+     * @return True if the message can be inserted in this queue
+     */
+    virtual bool matchesFilter(const Message& msg);
+protected:
+
+    /**
+     * Callback method for message processing
+     * Default calls Engine::dispatch
+     * @param msg The message to process
+     */
+    virtual void received(Message& msg);
+
+private:
+    NamedList m_filters;
+    ObjList m_messages;
+    ObjList m_workers;
+    ObjList* m_append;
+    unsigned int m_count;
+};
+
 
 /**
  * Initialization and information about plugins.
@@ -1198,9 +1333,10 @@ public:
     /**
      * Enqueue a message in the message queue for asynchronous dispatching
      * @param msg The message to enqueue, will be destroyed after dispatching
+     * @param skipHooks True to append the message directly into the main queue
      * @return True if enqueued, false on error (already queued)
      */
-    static bool enqueue(Message* msg);
+    static bool enqueue(Message* msg, bool skipHooks = false);
 
     /**
      * Convenience function.
@@ -1251,6 +1387,19 @@ public:
 	{ return s_self ? s_self->m_dispatcher.trackParam() : String::empty(); }
 
     /**
+     * Appends a new message hook to the hooks list.
+     * @param hook The message hook to append.
+     * @return True if the message hook was successfully appended to the hooks list
+     */
+    static bool installHook(MessageHook* hook);
+
+    /**
+     * Remove a message hook from the hooks list.
+     * @param hook The hook to remove.
+     */
+    static void uninstallHook(MessageHook* hook);
+
+    /**
      * Get a count of plugins that are actively in use
      * @return Count of plugins in use
      */
@@ -1269,6 +1418,13 @@ public:
      */
     inline unsigned int handlerCount()
 	{ return m_dispatcher.handlerCount(); }
+
+    /**
+     * Get the number of post-handling hooks in the dispatcher
+     * @return Count of hooks
+     */
+    inline unsigned int postHookCount()
+	{ return m_dispatcher.postHookCount(); }
 
     /**
      * Loads the plugins from an extra plugins directory or just an extra plugin

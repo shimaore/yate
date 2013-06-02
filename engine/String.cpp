@@ -139,6 +139,122 @@ static inline char hexEncode(char nib)
 }
 
 
+void UChar::encode()
+{
+    if (m_chr < 0x80) {
+	m_str[0] = (char)m_chr;
+	m_str[1] = '\0';
+    }
+    else if (m_chr < 0x800) {
+	m_str[0] = (char)(0xc0 | ((m_chr >>  6) & 0x1f));
+	m_str[1] = (char)(0x80 | (m_chr & 0x3f));
+	m_str[2] = '\0';
+    }
+    else if (m_chr < 0xffff) {
+	m_str[0] = (char)(0xe0 | ((m_chr >> 12) & 0x0f));
+	m_str[1] = (char)(0x80 | ((m_chr >>  6) & 0x3f));
+	m_str[2] = (char)(0x80 | (m_chr & 0x3f));
+	m_str[3] = '\0';
+    }
+    else if (m_chr < 0x1fffff) {
+	m_str[0] = (char)(0xf0 | ((m_chr >> 18) & 0x07));
+	m_str[1] = (char)(0x80 | ((m_chr >> 12) & 0x3f));
+	m_str[2] = (char)(0x80 | ((m_chr >>  6) & 0x3f));
+	m_str[3] = (char)(0x80 | (m_chr & 0x3f));
+	m_str[4] = '\0';
+    }
+    else if (m_chr < 0x3ffffff) {
+	m_str[0] = (char)(0xf8 | ((m_chr >> 24) & 0x03));
+	m_str[1] = (char)(0x80 | ((m_chr >> 18) & 0x3f));
+	m_str[2] = (char)(0x80 | ((m_chr >> 12) & 0x3f));
+	m_str[3] = (char)(0x80 | ((m_chr >>  6) & 0x3f));
+	m_str[4] = (char)(0x80 | (m_chr & 0x3f));
+	m_str[5] = '\0';
+    }
+    else if (m_chr < 0x7fffffff) {
+	m_str[0] = (char)(0xfc | ((m_chr >> 30) & 0x01));
+	m_str[1] = (char)(0x80 | ((m_chr >> 24) & 0x3f));
+	m_str[2] = (char)(0x80 | ((m_chr >> 18) & 0x3f));
+	m_str[3] = (char)(0x80 | ((m_chr >> 12) & 0x3f));
+	m_str[4] = (char)(0x80 | ((m_chr >>  6) & 0x3f));
+	m_str[5] = (char)(0x80 | (m_chr & 0x3f));
+	m_str[6] = '\0';
+    }
+    else
+	m_str[0] = '\0';
+}
+
+bool UChar::decode(const char*& str, unsigned int maxChar, bool overlong)
+{
+    operator=('\0');
+    if (!str)
+	return false;
+    if (maxChar < 128)
+	maxChar = 0x10ffff; // RFC 3629 default limit
+
+    unsigned int more = 0;
+    u_int32_t min = 0;
+    u_int32_t val = 0;
+
+    unsigned char c = (unsigned char)*str++;
+    // from 1st byte we find out how many are supposed to follow
+    if (!c)           // don't advance past NUL
+	--str;
+    else if (c < 0x80) // 1 byte, 0...0x7F, ASCII characters
+	val = c & 0x7f;
+    else if (c < 0xc0) // invalid as first UFT-8 byte
+	return false;
+    else if (c < 0xe0) {
+	// 2 bytes, 0x80...0x7FF
+	min = 0x80;
+	val = c & 0x1f;
+	more = 1;
+    }
+    else if (c < 0xf0) {
+	// 3 bytes, 0x800...0xFFFF, Basic Multilingual Plane
+	min = 0x800;
+	val = c & 0x0f;
+	more = 2;
+    }
+    else if (c < 0xf8) {
+	// 4 bytes, 0x10000...0x1FFFFF, RFC 3629 limit (10FFFF)
+	min = 0x10000;
+	val = c & 0x07;
+	more = 3;
+    }
+    else if (c < 0xfc) {
+	// 5 bytes, 0x200000...0x3FFFFFF
+	min = 0x200000;
+	val = c & 0x03;
+	more = 4;
+    }
+    else if (c < 0xfe) {
+	// 6 bytes, 0x4000000...0x7FFFFFFF
+	min = 0x4000000;
+	val = c & 0x01;
+	more = 5;
+    }
+    else
+	return false;
+
+    while (more--) {
+	c = (unsigned char)*str;
+	// all continuation bytes are in range [128..191]
+	if ((c & 0xc0) != 0x80)
+	    return false;
+	val = (val << 6) | (c & 0x3f);
+	++str;
+    }
+    operator=(val);
+    // got full value, check for overlongs and out of range
+    if (val > maxChar)
+	return false;
+    if (val < min && !overlong)
+	return false;
+    return true;
+}
+
+
 StringMatchPrivate::StringMatchPrivate()
 {
     XDebug(DebugAll,"StringMatchPrivate::StringMatchPrivate() [%p]",this);
@@ -181,6 +297,8 @@ void StringMatchPrivate::fixup()
 
 
 static const String s_empty;
+static ObjList s_atoms;
+static Mutex s_mutex(false,"Atom");
 
 const String& String::empty()
 {
@@ -209,6 +327,8 @@ String::String(const String& value)
 	m_string = ::strdup(value.c_str());
 	if (!m_string)
 	    Debug("String",DebugFail,"strdup() returned NULL!");
+	else
+	    m_length = value.length();
 	changed();
     }
 }
@@ -222,6 +342,7 @@ String::String(char value, unsigned int repeat)
 	if (m_string) {
 	    ::memset(m_string,value,repeat);
 	    m_string[repeat] = 0;
+	    m_length = repeat;
 	}
 	else
 	    Debug("String",DebugFail,"malloc(%d) returned NULL!",repeat+1);
@@ -271,6 +392,8 @@ String::String(const String* value)
 	m_string = ::strdup(value->c_str());
 	if (!m_string)
 	    Debug("String",DebugFail,"strdup() returned NULL!");
+	else
+	    m_length = value->length();
 	changed();
     }
 }
@@ -310,6 +433,7 @@ String& String::assign(const char* value, int len)
 		data[len] = 0;
 		char* odata = m_string;
 		m_string = data;
+		m_length = len;
 		changed();
 		if (odata)
 		    ::free(odata);
@@ -332,6 +456,7 @@ String& String::assign(char value, unsigned int repeat)
 	    data[repeat] = 0;
 	    char* odata = m_string;
 	    m_string = data;
+	    m_length = repeat;
 	    changed();
 	    if (odata)
 		::free(odata);
@@ -367,6 +492,7 @@ String& String::hexify(void* data, unsigned int len, char sep, bool upCase)
 	    *d = '\0';
 	    char* odata = m_string;
 	    m_string = data;
+	    m_length = repeat;
 	    changed();
 	    if (odata)
 		::free(odata);
@@ -383,7 +509,10 @@ void String::changed()
 {
     clearMatches();
     m_hash = YSTRING_INIT_HASH;
-    m_length = m_string ? ::strlen(m_string) : 0;
+    if (!m_string)
+	m_length = 0;
+    else if (!m_length)
+	m_length = ::strlen(m_string);
 }
 
 void String::clear()
@@ -567,6 +696,7 @@ String& String::operator=(const char* value)
     if (value != c_str()) {
 	char *tmp = m_string;
 	m_string = value ? ::strdup(value) : 0;
+	m_length = 0;
 	if (value && !m_string)
 	    Debug("String",DebugFail,"strdup() returned NULL!");
 	changed();
@@ -632,6 +762,14 @@ String& String::operator>>(char& store)
 	store = m_string[0];
 	assign(m_string+1);
     }
+    return *this;
+}
+
+String& String::operator>>(UChar& store)
+{
+    const char* str = m_string;
+    store.decode(str);
+    assign(str);
     return *this;
 }
 
@@ -701,6 +839,7 @@ String& String::append(const char* value, int len)
 	if (len < 0) {
 	    if (!m_string) {
 		m_string = ::strdup(value);
+		m_length = 0;
 		if (!m_string)
 		    Debug("String",DebugFail,"strdup() returned NULL!");
 		changed();
@@ -718,6 +857,7 @@ String& String::append(const char* value, int len)
 	    ::strncpy(tmp2+olen,value,len-olen);
 	    tmp2[len] = 0;
 	    m_string = tmp2;
+	    m_length = len;
 	    ::free(tmp1);
 	}
 	else
@@ -773,6 +913,7 @@ String& String::append(const ObjList* list, const char* separator, bool force)
     }
     newStr[olen] = 0;
     m_string = newStr;
+    m_length = olen;
     ::free(oldStr);
     changed();
     return *this;
@@ -799,20 +940,6 @@ bool String::operator!=(const char* value) const
     if (!m_string)
 	return value && *value;
     return (!value) || ::strcmp(m_string,value);
-}
-
-bool String::operator==(const String& value) const
-{
-    if (hash() != value.hash())
-	return false;
-    return operator==(value.c_str());
-}
-
-bool String::operator!=(const String& value) const
-{
-    if (hash() != value.hash())
-	return true;
-    return operator!=(value.c_str());
 }
 
 bool String::operator&=(const char* value) const
@@ -1163,17 +1290,17 @@ unsigned int String::hash(const char* value)
     return h;
 }
 
-int String::lenUtf8(const char* value, unsigned int maxSeq, bool overlong)
+int String::lenUtf8(const char* value, unsigned int maxChar, bool overlong)
 {
     if (!value)
 	return 0;
-    if (maxSeq < 1)
-	maxSeq = 4; // RFC 3629 default limit
+    if (maxChar < 128)
+	maxChar = 0x10ffff; // RFC 3629 default limit
 
     int count = 0;
     unsigned int more = 0;
-    int32_t min = 0;
-    int32_t val = 0;
+    u_int32_t min = 0;
+    u_int32_t val = 0;
 
     while (unsigned char c = (unsigned char) *value++) {
 	if (more) {
@@ -1182,9 +1309,11 @@ int String::lenUtf8(const char* value, unsigned int maxSeq, bool overlong)
 		return -1;
 	    val = (val << 6) | (c & 0x3f);
 	    if (!--more) {
+		// got full value, check for overlongs and out of range
+		if (val > maxChar)
+		    return -1;
 		if (overlong)
 		    continue;
-		// got full value, check for overlongs
 		if (val < min)
 		    return -1;
 	    }
@@ -1192,35 +1321,35 @@ int String::lenUtf8(const char* value, unsigned int maxSeq, bool overlong)
 	}
 	count++;
 	// from 1st byte we find out how many are supposed to follow
-	if (c < 128)      // 1 byte, 0...0x7F, ASCII characters, no check
+	if (c < 0x80)      // 1 byte, 0...0x7F, ASCII characters, no check
 	    ;
-	else if (c < 192) // invalid as first UFT-8 byte
+	else if (c < 0xc0) // invalid as first UFT-8 byte
 	    return -1;
-	else if (c < 224) {
+	else if (c < 0xe0) {
 	    // 2 bytes, 0x80...0x7FF
 	    min = 0x80;
 	    val = c & 0x1f;
 	    more = 1;
 	}
-	else if (c < 240) {
+	else if (c < 0xf0) {
 	    // 3 bytes, 0x800...0xFFFF, Basic Multilingual Plane
 	    min = 0x800;
 	    val = c & 0x0f;
 	    more = 2;
 	}
-	else if (c < 248) {
+	else if (c < 0xf8) {
 	    // 4 bytes, 0x10000...0x1FFFFF, RFC 3629 limit (10FFFF)
 	    min = 0x10000;
 	    val = c & 0x07;
 	    more = 3;
 	}
-	else if (c < 252) {
+	else if (c < 0xfc) {
 	    // 5 bytes, 0x200000...0x3FFFFFF
 	    min = 0x200000;
 	    val = c & 0x03;
 	    more = 4;
 	}
-	else if (c < 254) {
+	else if (c < 0xfe) {
 	    // 6 bytes, 0x4000000...0x7FFFFFFF
 	    min = 0x4000000;
 	    val = c & 0x01;
@@ -1228,28 +1357,25 @@ int String::lenUtf8(const char* value, unsigned int maxSeq, bool overlong)
 	}
 	else
 	    return -1;
-	// check if we accept a character with such sequence length
-	if (more >= maxSeq)
-	    return -1;
     }
     if (more)
 	return -1;
     return count;
 }
 
-int String::fixUtf8(const char* replace, unsigned int maxSeq, bool overlong)
+int String::fixUtf8(const char* replace, unsigned int maxChar, bool overlong)
 {
     if (null())
 	return 0;
-    if (maxSeq < 1)
-	maxSeq = 4; // RFC 3629 default limit
+    if (maxChar < 128)
+	maxChar = 0x10ffff; // RFC 3629 default limit
     if (!replace)
 	replace = "\xEF\xBF\xBD";
 
     int count = 0;
     unsigned int more = 0;
-    int32_t min = 0;
-    int32_t val = 0;
+    u_int32_t min = 0;
+    u_int32_t val = 0;
     unsigned int pos = 0;
     bool bad = false;
     String tmp;
@@ -1257,9 +1383,6 @@ int String::fixUtf8(const char* replace, unsigned int maxSeq, bool overlong)
     for (unsigned int i = 0; i < m_length; i++) {
 	unsigned char c = (unsigned char) at(i);
 	if (more) {
-	    // remember to reject a character with a too long sequence
-	    if (more >= maxSeq)
-		bad = true;
 	    // all continuation bytes are in range [128..191]
 	    if ((c & 0xc0) != 0x80) {
 		// truncated sequence, must search for 1st byte again
@@ -1270,8 +1393,8 @@ int String::fixUtf8(const char* replace, unsigned int maxSeq, bool overlong)
 	    else {
 		val = (val << 6) | (c & 0x3f);
 		if (!--more) {
-		    // got full value, check for overlongs
-		    if ((val < min) && !overlong)
+		    // got full value, check for overlongs and out of range
+		    if ((val > maxChar) || ((val < min) && !overlong))
 			bad = true;
 		    // finished multibyte, add it to temporary
 		    if (bad) {
@@ -1287,35 +1410,35 @@ int String::fixUtf8(const char* replace, unsigned int maxSeq, bool overlong)
 	pos = i;
 	bad = false;
 	// from 1st byte we find out how many are supposed to follow
-	if (c < 128)      // 1 byte, 0...0x7F, ASCII characters, good
+	if (c < 0x80)      // 1 byte, 0...0x7F, ASCII characters, good
 	    ;
-	else if (c < 192) // invalid as first UFT-8 byte
+	else if (c < 0xc0) // invalid as first UFT-8 byte
 	    bad = true;
-	else if (c < 224) {
+	else if (c < 0xe0) {
 	    // 2 bytes, 0x80...0x7FF
 	    min = 0x80;
 	    val = c & 0x1f;
 	    more = 1;
 	}
-	else if (c < 240) {
+	else if (c < 0xf0) {
 	    // 3 bytes, 0x800...0xFFFF, Basic Multilingual Plane
 	    min = 0x800;
 	    val = c & 0x0f;
 	    more = 2;
 	}
-	else if (c < 248) {
+	else if (c < 0xf8) {
 	    // 4 bytes, 0x10000...0x1FFFFF, RFC 3629 limit (10FFFF)
 	    min = 0x10000;
 	    val = c & 0x07;
 	    more = 3;
 	}
-	else if (c < 252) {
+	else if (c < 0xfc) {
 	    // 5 bytes, 0x200000...0x3FFFFFF
 	    min = 0x200000;
 	    val = c & 0x03;
 	    more = 4;
 	}
-	else if (c < 254) {
+	else if (c < 0xfe) {
 	    // 6 bytes, 0x4000000...0x7FFFFFFF
 	    min = 0x4000000;
 	    val = c & 0x01;
@@ -1345,7 +1468,7 @@ int String::fixUtf8(const char* replace, unsigned int maxSeq, bool overlong)
 
 void* String::getObject(const String& name) const
 {
-    if (name == YSTRING("String"))
+    if (name == YATOM("String"))
 	return const_cast<String*>(this);
     return GenObject::getObject(name);
 }
@@ -1353,6 +1476,26 @@ void* String::getObject(const String& name) const
 const String& String::toString() const
 {
     return *this;
+}
+
+const String* String::atom(const String*& str, const char* val)
+{
+    if (!str) {
+	s_mutex.lock();
+	if (!str) {
+	    if (TelEngine::null(val))
+		str = &s_empty;
+	    else {
+		str = static_cast<const String*>(s_atoms[val]);
+		if (!str) {
+		    str = new String(val);
+		    s_atoms.insert(str);
+		}
+	    }
+	}
+	s_mutex.unlock();
+    }
+    return str;
 }
 
 
@@ -1469,7 +1612,7 @@ const String& NamedString::toString() const
 
 void* NamedString::getObject(const String& name) const
 {
-    if (name == YSTRING("NamedString"))
+    if (name == YATOM("NamedString"))
 	return (void*)this;
     return String::getObject(name);
 }
@@ -1504,7 +1647,7 @@ GenObject* NamedPointer::takeData()
 
 void* NamedPointer::getObject(const String& name) const
 {
-    if (name == YSTRING("NamedPointer"))
+    if (name == YATOM("NamedPointer"))
 	return (void*)this;
     void* p = NamedString::getObject(name);
     if (p)
