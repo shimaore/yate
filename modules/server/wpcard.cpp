@@ -25,6 +25,9 @@
 #include <yatephone.h>
 #include <yatesig.h>
 
+#include <tonegen.h>
+#include <tonedetect.h>
+
 #ifdef _WINDOWS
 #error This module is not for Windows
 #else
@@ -41,6 +44,7 @@ extern "C" {
 #include <wanpipe.h>
 #ifdef NEW_WANPIPE_API
 #include <aft_core.h>
+#include <libsangoma.h>
 #else
 #include <sdla_aft_te1.h>
 #endif
@@ -180,10 +184,14 @@ public:
 	{ return m_card; }
     inline const String& device() const
 	{ return m_device; }
+    inline const String& devname() const
+	{ return m_devname; }
     inline void card(const char* name)
 	{ m_card = name; }
     inline void device(const char* name)
 	{ m_device = name; }
+    inline void devname(const char* name)
+	{ m_devname = name; }
     // Get/Set echo canceller availability
     inline bool echoCanAvail() const
 	{ return m_echoCanAvail; }
@@ -222,7 +230,8 @@ private:
     LinkStatus m_status;                  // The state of the link
     Socket m_socket;                     // The socket
     String m_card;                       // Card name used to open socket
-    String m_device;                     // Device name used to open socket
+    String m_device;                     // Device name used to open socket (e.g. "w1g2")
+    String m_devname;                    // Device name used for ioctl (e.g. "wanpipe1")
     bool m_echoCanAvail;                 // Echo canceller is available or not
     bool m_canRead;                      // Set by select(). Can read from socket
     bool m_canWrite;                     // Set by select(). Can write to socket
@@ -331,9 +340,10 @@ protected:
 // Single Wanpipe B-channel
 class WpCircuit : public SignallingCircuit, public Mutex
 {
+    friend class WpSpan;
 public:
     WpCircuit(unsigned int code, SignallingCircuitGroup* group, WpSpan* data,
-	unsigned int buflen, unsigned int channel);
+	unsigned int buflen, unsigned int channel, unsigned long chanMap);
     // Get circuit channel number inside its span
     unsigned int channel() const
 	{ return m_channel; }
@@ -352,7 +362,14 @@ public:
 	{ return m_consumer; }
     // Enqueue received events
     bool enqueueEvent(SignallingCircuitEvent* e);
+protected:
+    unsigned long m_chanMap;
+    WpSpan* m_span;
 private:
+    bool setLoopback();
+    bool clearLoopback();
+    bool setupContinuityTest();
+    bool clearContinuityTest();
     unsigned int m_channel;              // Channel number inside span
     WpSource* m_sourceValid;             // Circuit's source if reserved, otherwise: 0
     WpConsumer* m_consumerValid;         // Circuit's consumer if reserved, otherwise: 0
@@ -380,6 +397,8 @@ public:
     void run();
     // Find a circuit by channel
     WpCircuit* find(unsigned int channel);
+    // Change EC status for one of our circuits.
+    bool echoCancel(bool enable, const WpCircuit* circuit);
 protected:
     // Create circuits (all or nothing)
     // delta: number to add to each circuit code
@@ -572,6 +591,7 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
     if (fd >= 0) {
 	wan_ec_api_t ecapi;
 	::memset(&ecapi,0,sizeof(ecapi));
+	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
 #ifdef HAVE_WANPIPE_HWEC_3310
 	ecapi.fe_chan_map = chanmap;
 #else
@@ -593,11 +613,129 @@ bool WpSocket::echoCancel(bool enable, unsigned long chanmap)
 #endif
 #endif
 	}
-	else
+	else {
 	    ecapi.cmd = WAN_EC_CMD_DTMF_DISABLE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.u_tone_config.id = WP_API_EVENT_TONE_DTMF;
+#ifdef NEW_WANPIPE_API
+	    ecapi.u_tone_config.type = WAN_EC_TONE_STOP;
+	    ecapi.u_tone_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
+#else
+	    ecapi.u_dtmf_config.type = WAN_EC_TONE_STOP;
+#ifdef HAVE_WANPIPE_HWEC_3310
+	    ecapi.u_dtmf_config.port_map = WAN_EC_CHANNEL_PORT_SOUT;
+#else
+	    ecapi.u_dtmf_config.port = WAN_EC_CHANNEL_PORT_SOUT;
+#endif
+#endif
+	}
 	ecapi.err = WAN_EC_API_RC_OK;
-	if (::ioctl(fd,ecapi.cmd,ecapi))
-	    operation = "IOCTL";
+	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
+	    operation = "IOCTL DTMF";
+
+#ifdef NEW_WANPIPE_API
+
+	ok = (0 == operation);
+
+	// Change Echo-Canceler state
+	::memset(&ecapi,0,sizeof(ecapi));
+	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
+#ifdef HAVE_WANPIPE_HWEC_3310
+	ecapi.fe_chan_map = chanmap;
+#else
+	ecapi.channel_map = chanmap;
+#endif
+	if (enable) {
+	    ecapi.cmd = WAN_EC_API_CMD_OPMODE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.u_chan_opmode.opmode = 0; // Normal
+	}
+	else {
+	    ecapi.cmd = WAN_EC_API_CMD_OPMODE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.u_chan_opmode.opmode = 5; // No Echo
+	}
+	ecapi.err = WAN_EC_API_RC_OK;
+	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
+	    operation = "IOCTL Echo";
+
+/*
+# define WAN_EC_API_CMD_BYPASS_ENABLE 7
+# define WAN_EC_API_CMD_BYPASS_DISABLE 8
+	ok = (0 == operation);
+
+	// Change Echo-Canceler state
+	::memset(&ecapi,0,sizeof(ecapi));
+	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
+#ifdef HAVE_WANPIPE_HWEC_3310
+	ecapi.fe_chan_map = chanmap;
+#else
+	ecapi.channel_map = chanmap;
+#endif
+	if (enable) {
+	    ecapi.cmd = WAN_EC_API_CMD_BYPASS_DISABLE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	}
+	else {
+	    ecapi.cmd = WAN_EC_API_CMD_BYPASS_ENABLE;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	}
+	ecapi.err = WAN_EC_API_RC_OK;
+	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
+	    operation = "IOCTL Echo";
+*/
+/*
+	ok = (0 == operation);
+
+	// Change CED (2100Hz) tone removal
+	::memset(&ecapi,0,sizeof(ecapi));
+	::strncpy(ecapi.devname,(const char*)m_devname,sizeof(ecapi.devname));
+#ifdef HAVE_WANPIPE_HWEC_3310
+	ecapi.fe_chan_map = chanmap;
+#else
+	ecapi.channel_map = chanmap;
+#endif
+	wan_custom_param_t custom_param;
+	strncpy(custom_param.name,"WANEC_EnableToneDisabler",sizeof(custom_param.name));
+	if (enable) {
+	    strncpy(custom_param.sValue,"TRUE",sizeof(custom_param.sValue));
+	    custom_param.dValue = 1;
+	    ecapi.cmd = WAN_EC_API_CMD_MODIFY_CHANNEL;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.custom_conf.param_no = 1;
+	    ecapi.u_chan_custom.custom = 1; // notused
+	    ecapi.u_chan_custom.custom_conf.param_no = 1;
+	    ecapi.u_chan_custom.custom_conf.params = &custom_param;
+	}
+	else {
+	    strncpy(custom_param.sValue,"FALSE",sizeof(custom_param.sValue));
+	    custom_param.dValue = 0;
+	    ecapi.cmd = WAN_EC_API_CMD_MODIFY_CHANNEL;
+	    ecapi.verbose = WAN_EC_VERBOSE_EXTRA1;
+	    ecapi.custom_conf.param_no = 1;
+	    ecapi.u_chan_custom.custom = 1;
+	    ecapi.u_chan_custom.custom_conf.param_no = 1;
+	    ecapi.u_chan_custom.custom_conf.params = &custom_param;
+	}
+	ecapi.err = WAN_EC_API_RC_OK;
+	if (ok && ::ioctl(fd,ecapi.cmd,&ecapi))
+	    operation = "IOCTL CED removal";
+*/
+
+    /* WAN API for enable/disable of the EC */
+    // api.cmd = WP_API_CMD_ENABLE_HWEC;
+    char devname[32];
+    ::strncpy(devname,(const char*)m_devname,sizeof(devname));
+    if(enable) {
+	// sangoma_tdm_enable_hwec(fd,tdm_api);
+	sangoma_hwec_enable(devname,chanmap);
+    } else {
+	// sangoma_tdm_disable_hwec(fd,tdm_api);
+	sangoma_hwec_disable(devname,chanmap);
+    }
+
+
+#endif
     }
     else
 	operation = "Open";
@@ -1209,8 +1347,10 @@ unsigned long WpConsumer::Consume(const DataBlock& data, unsigned long tStamp, u
  * WpCircuit
  */
 WpCircuit::WpCircuit(unsigned int code, SignallingCircuitGroup* group, WpSpan* data,
-	unsigned int buflen, unsigned int channel)
+	unsigned int buflen, unsigned int channel, unsigned long chanmap)
     : SignallingCircuit(TDM,code,Idle,group,data), Mutex(true,"WpCircuit"),
+    m_chanMap(chanmap),
+    m_span(data),
     m_channel(channel),
     m_sourceValid(0),
     m_consumerValid(0),
@@ -1238,6 +1378,52 @@ WpCircuit::~WpCircuit()
     TelEngine::destruct(m_consumer);
 }
 
+bool WpCircuit::setLoopback() {
+    return m_span->echoCancel(false,this) &&
+	m_source->attach(m_consumer,true);
+}
+
+bool WpCircuit::clearLoopback() {
+    return m_source->detach(m_consumer) &&
+	m_span->echoCancel(true,this);
+}
+
+bool WpCircuit::setupContinuityTest() {
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) m_span=%p [%p]",code(),m_span,this);
+    if (!m_span->echoCancel(false,this))
+	return false;
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) m_source=%p m_consumer=%p [%p]",code(),m_source,m_consumer,this);
+    if(!m_source || !m_consumer)
+	return false;
+    // Start generating "cotv" tone on m_source.
+    String tone_name = "cotv";
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) getTone [%p]",code(),this);
+    ToneSource* tone_source = ToneSource::getTone(tone_name,YSTRING("itu"));
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) attach tone_source=%p [%p]",code(),tone_source,this);
+    if(!tone_source)
+	return false;
+    if(!DataTranslator::attachChain(tone_source,m_consumer,true))
+	return false;
+    // Start detection of tone on m_consumer.
+    // This will generate a "chan.masquerade", message = "chan.dtmf", "text" = "O", "detected"="inband"
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) new ToneConsumer [%p]",code(),this);
+    ToneConsumer* tone_consumer = new ToneConsumer(group()->toString() + "/" +(String) code(),"cotv");
+    if(!tone_consumer)
+	return false;
+    Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) tone_consumer=%p [%p]",code(),tone_consumer,this);
+    if(!DataTranslator::attachChain(m_source,tone_consumer,true))
+	return false;
+    return true;
+}
+
+bool WpCircuit::clearContinuityTest() {
+    if (!m_span->echoCancel(true,this))
+	return false;
+
+    // FIXME: clear the tonegen / tonedetect
+    return true;
+}
+
 // Change circuit status. Clear events on succesfully changes status
 // Connected: Set valid source and consumer
 // Otherwise: Invalidate and reset source and consumer
@@ -1247,15 +1433,34 @@ bool WpCircuit::status(Status newStat, bool sync)
     if (SignallingCircuit::status() == newStat)
 	return true;
     // Allow status change for the following values
+    bool special = false;
+    bool ok = true;
     switch (newStat) {
 	case Missing:
 	case Disabled:
 	case Idle:
 	case Reserved:
 	    m_specialMode.clear();
-	    // fall through
+	    break;
 	case Special:
+	    if (m_specialMode.null())
+		return false;
+	    if (m_specialMode == "loopback") {
+		 ok = setLoopback();
+		 break;
+	    }
+	    if (m_specialMode == "test:loopback") {
+		ok = setupContinuityTest();
+		break;
+	    }
+	    special = true;
+	    break;
 	case Connected:
+	    if (m_specialMode == "loopback")
+		ok = clearLoopback();
+	    if (m_specialMode == "test:loopback")
+		ok = clearContinuityTest();
+	    m_specialMode.clear();
 	    break;
 	default: ;
 	    Debug(group(),DebugNote,
@@ -1285,7 +1490,7 @@ bool WpCircuit::status(Status newStat, bool sync)
     if (enableData) {
 	m_sourceValid = m_source;
 	m_consumerValid = m_consumer;
-	if (newStat == Special) {
+	if (special && !ok) {
 	    Message m("circuit.special");
 	    m.userData(this);
 	    if (group())
@@ -1296,7 +1501,7 @@ bool WpCircuit::status(Status newStat, bool sync)
 		m.addParam("mode",m_specialMode);
 	    return Engine::dispatch(m);
 	}
-	return true;
+	return ok;
     }
     // Disable data if not already disabled
     if (m_consumerValid) {
@@ -1321,7 +1526,7 @@ bool WpCircuit::status(Status newStat, bool sync)
 	m_source->clear();
 	m_source->m_total = 0;
     }
-    return true;
+    return ok;
 }
 
 // Update source/consumer data format
@@ -1456,6 +1661,7 @@ bool WpSpan::init(const NamedList& config, const NamedList& defaults, NamedList&
 	return false;
     }
     // Set socket card / device
+    m_socket.devname(config);
     m_socket.card(!params.null() ? params : config);
     const char* voice = params.getValue("voicegroup",config.getValue("voicegroup"));
     if (!voice) {
@@ -1580,11 +1786,16 @@ bool WpSpan::createCircuits(unsigned int delta, const String& cicList)
     bool ok = true;
     m_chanMap = 0;
     for (i = 0; i < m_count; i++) {
-	m_circuits[i] = new WpCircuit(delta + cicCodes[i],m_group,this,m_buflen,cicCodes[i]);
+	unsigned int channel = cicCodes[i];
+	unsigned long circuit_chanmap = ((unsigned long)1 << channel);
+	m_circuits[i] = new WpCircuit(delta + cicCodes[i],m_group,this,m_buflen,channel,circuit_chanmap);
+	Debug(m_group,DebugNote,
+	    "WpSpan('%s'). circuits[i] = %p [%p]",
+	    id().safe(),m_circuits[i],this);
 	if (m_group->insert(m_circuits[i])) {
 	    m_circuits[i]->ref();
 	    if (m_circuits[i]->channel())
-		m_chanMap |= ((unsigned long)1 << (m_circuits[i]->channel() - 1));
+		m_chanMap |= circuit_chanmap;
 	    continue;
 	}
 	// Failure
@@ -1732,6 +1943,24 @@ void WpSpan::run()
 		    s->put(swap(*dat));
 	    }
 	}
+    }
+}
+
+// Change EC on one of our circuits
+bool WpSpan::echoCancel(bool enable, const WpCircuit* circuit)
+{
+    if (!circuit) {
+	Debug(m_group,DebugNote,"WpSpan::echoCancel(): no circuit.");
+	return false;
+    }
+    if (circuit->m_span != this) {
+	Debug(m_group,DebugNote,"WpSpan::echoCancel(): Circuit does not belong to this span.");
+	return false;
+    }
+    if (m_echoCancel) {
+	return m_socket.echoCancel(enable,circuit->m_chanMap);
+    } else {
+	return true;
     }
 }
 

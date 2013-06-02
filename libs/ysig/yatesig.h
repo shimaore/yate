@@ -8775,6 +8775,8 @@ private:
     bool transmitIAM();
     // Transmit SAM digits
     bool transmitSAM(const char* extra = 0);
+    // Transmit the COT message, indicating success or failure.
+    bool transmitCOT(bool success);
     // (Re)transmit REL. Create and populate message if needed. Remember sls
     bool transmitREL(const NamedList* params = 0);
     // Check if the circuit needs continuity testing
@@ -8817,6 +8819,7 @@ private:
     SignallingTimer m_relTimer;          // Send release
     SignallingTimer m_iamTimer;          // Send initial address
     SignallingTimer m_sgmRecvTimer;      // Receive segmented message
+    SignallingTimer m_iamContTimer;      // IAM Continuity timer
     SignallingTimer m_contTimer;         // Continuity timer
     SignallingTimer m_anmTimer;          // T9 ACM -> ANM timer
     // FR-ISUP
@@ -9247,6 +9250,7 @@ private:
     u_int64_t m_t19Interval;             // Q.764 T19 CGB global timer interval
     u_int64_t m_t20Interval;             // Q.764 T20 CGU timer interval
     u_int64_t m_t21Interval;             // Q.764 T21 CGU global timer interval
+    u_int64_t m_t24Interval;             // Q.764 T24 Check Tone Sent
     u_int64_t m_t27Interval;             // Q.764 T27 Reset after Cont. Check failure
     u_int64_t m_t34Interval;             // Q.764 T34 Segmentation receive timout
     SignallingMessageTimerList m_pending;// Pending messages (RSC ...)
@@ -9268,6 +9272,7 @@ private:
     // Debug flags
     bool m_printMsg;                     // Print messages to output
     bool m_extendedDebug;                // Extended debug flag
+    String m_testScenario;               // Test exception cases
 };
 
 /**

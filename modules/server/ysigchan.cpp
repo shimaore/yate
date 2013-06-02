@@ -497,6 +497,7 @@ protected:
     // Save circuits state
     // Return true if changed
     bool verifyController(const NamedList* params, bool save = true);
+    virtual bool masquerade(String& id, Message& msg);
     inline SS7ISUP* isup()
 	{ return static_cast<SS7ISUP*>(m_controller); }
     bool m_bicc;
@@ -1283,7 +1284,6 @@ void SigChannel::handleEvent(SignallingEvent* event)
 	case SignallingEvent::Ringing:   evRinging(event);  break;
 	case SignallingEvent::Circuit:   evCircuit(event);  break;
 	case SignallingEvent::Generic:   evGeneric(event,"transport"); break;
-	case SignallingEvent::Charge:    evGeneric(event,"charge");    break;
 	case SignallingEvent::Suspend:   evGeneric(event,"suspend");   break;
 	case SignallingEvent::Resume:    evGeneric(event,"resume");    break;
 	case SignallingEvent::Charge:    evGeneric(event,"charge");    break;
@@ -1446,8 +1446,6 @@ bool SigChannel::msgUpdate(Message& msg)
     SignallingEvent::Type evt = SignallingEvent::Unknown;
     if (oper == YSTRING("transport"))
 	evt = SignallingEvent::Generic;
-    else if (oper == YSTRING("charge"))
-	evt = SignallingEvent::Charge;
     else if (oper == YSTRING("suspend"))
 	evt = SignallingEvent::Suspend;
     else if (oper == YSTRING("resume"))
@@ -3702,6 +3700,33 @@ void SigSS7Isup::handleEvent(SignallingEvent* event)
 	verifyController(&event->message()->params());
     else
 	verifyController(0);
+}
+
+bool SigSS7Isup::masquerade(String& id, Message& msg)
+{
+    if(!isup())
+        return false;
+
+    String cic_name = msg.getParam("id")./* get the last component separated by slash */;
+    unsigned int cic = cic_name.toInteger();
+
+    SS7ISUPCall* found_call = NULL;
+    ObjList* o = controller()->calls().skipNull();
+    for(;o; o = o->skipNext() ) {
+      SS7ISUPCall* call = static_cast<SS7ISUPCall*>(o->get());
+      if(call->id() == cic) {
+	found_call = call;
+      }
+    }
+
+    if (found_call) {
+	msg = msg.getValue("message");
+	msg.clearParam("message");
+	/* FIXME: How do we retrieve the proper data for this call? */
+	msg.setParam("peerid","sig/1");
+	msg.setParam("targetid","tone/1");
+    }
+    return true;
 }
 
 // Save circuits state
