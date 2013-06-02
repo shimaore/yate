@@ -1432,7 +1432,6 @@ public:
 	Generic,
 	// Call related
 	NewCall,
-	ContinuitySuccessful,
 	Accept,
 	Connect,
 	Complete,

@@ -2734,6 +2734,19 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 	    }
 	    break;
 	case SignallingEvent::Info:
+		{
+			String tone = event->message()->params().getValue(YSTRING("tone"));
+			Debug("SS7ISUPCall::sendEvent", DebugInfo, "SignallingEvent::Info tone = `%s`",(const char*)tone);
+			if(tone == "O") {
+			   Debug(isup(),DebugNote,"Cont successful going to Transmit COT");
+			    if (validMsgState(true,SS7MsgISUP::COT)) {
+				mylock.drop();
+				transmitCOT(true);
+				result = true;
+				break;
+			    }
+			}
+		}
 	    if (validMsgState(true,SS7MsgISUP::SAM)) {
 		mylock.drop();
 		transmitSAM(event->message()->params().getValue(YSTRING("tone")));
@@ -2768,13 +2781,6 @@ bool SS7ISUPCall::sendEvent(SignallingEvent* event)
 		result = transmitMessage(m);
 	    }
 	    break;
-	case SignallingEvent::ContinuitySuccessful:
-	    if (validMsgState(true,SS7MsgISUP::COT)) {
-		mylock.drop();
-		transmitCOT(true);
-		result = true;
-		break;
-	    }
 	default:
 	    DDebug(isup(),DebugStub,
 		"Call(%u). sendEvent not implemented for '%s' [%p]",
@@ -5051,15 +5057,6 @@ SignallingEvent* SS7ISUP::processCircuitEvent(SignallingCircuitEvent*& event,
 		msg->params().addParam("inband",event->getValue(YSTRING("inband"),String::boolText(true)));
 		ev = new SignallingEvent(SignallingEvent::Info,msg,call);
 		TelEngine::destruct(msg);
-	    }
-	    if (event->getValue(YSTRING("text"))) {
-		// Continuity Testing
-		if(event->getValue(YSTRING("text")) == "O") {
-		    SignallingMessage* msg = new SignallingMessage(event->c_str());
-		    ev = new SignallingEvent(SignallingEvent::ContinuitySuccessful,msg,call);
-		    TelEngine::destruct(msg);
-		}
-		// TODO: Fax detection etc.
 	    }
 	    break;
 	default:

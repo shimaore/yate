@@ -1407,7 +1407,7 @@ bool WpCircuit::setupContinuityTest() {
     // Start detection of tone on m_consumer.
     // This will generate a "chan.masquerade", message = "chan.dtmf", "text" = "O", "detected"="inband"
     Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) new ToneConsumer [%p]",code(),this);
-    ToneConsumer* tone_consumer = new ToneConsumer((String)this,"cotv");
+    ToneConsumer* tone_consumer = new ToneConsumer(group()->toString() + "/" +(String) code(),"cotv");
     if(!tone_consumer)
 	return false;
     Debug(group(),DebugNote,"WpCircuit::setupContinuityTest(%u) tone_consumer=%p [%p]",code(),tone_consumer,this);
