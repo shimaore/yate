@@ -3707,7 +3707,8 @@ bool SigSS7Isup::masquerade(String& id, Message& msg)
     if(!isup())
         return false;
 
-    String cic_name = msg.getParam("id")./* get the last component separated by slash */;
+    String full_id = msg.getValue("id");
+    String cic_name = full_id.substr(full_id.rfind('/')+1);
     unsigned int cic = cic_name.toInteger();
 
     SS7ISUPCall* found_call = NULL;
