@@ -7539,14 +7539,91 @@ protected:
 };
 
 /**
- * RFC3332 SS7 Layer 3 implementation over SCTP/IP.
+ * The common client side (ASP) of SIGTRAN SS7 MTP3 User Adaptation (RFC4666)
+ * @short Client side of SIGTRAN SS7 MTP3 UA
+ */
+class YSIG_API SS7M3UAClient : public SIGAdaptClient
+{
+    YCLASS(SS7M3UAClient,SIGAdaptClient)
+public:
+    /**
+     * Contructor of an empty IUA client
+     */
+    inline SS7M3UAClient(const NamedList& params)
+	: SIGAdaptClient(params.safe("SS7M3UAClient"),&params,3,2905)
+	{ }
+    virtual bool processMSG(unsigned char msgVersion, unsigned char msgClass,
+	unsigned char msgType, const DataBlock& msg, int streamId);
+};
+
+/**
+ * The common server side (SG) of SIGTRAN SS7 MTP3 User Adaptation (RFC4666)
+ * @short Server side of SIGTRAN SS7 MTP3 UA
+ */
+class YSIG_API SS7M3UAServer : public SIGAdaptServer
+{
+    YCLASS(SS7M3UAServer,SIGAdaptServer)
+public:
+    inline SS7M3UAServer(const NamedList& params)
+	: SIGAdaptServer(params.safe("SS7M3UAServer"),&params,3,2905)
+	{ }
+};
+
+/**
+ * RFC4666 SS7 Layer 3 implementation over SCTP/IP.
  * M3UA is intended to be used as a Provider-User where real MTP3 runs on a
  *  Signalling Gateway and MTP users are located on an Application Server.
  * @short SIGTRAN MTP3 User Adaptation Layer
  */
 class YSIG_API SS7M3UA : public SS7Layer3, public SIGAdaptUser
 {
+    friend class SS7M3UAClient;
+    friend class SS7M3UAServer;
     YCLASS(SS7M3UA,SS7Layer3)
+public:
+    /**
+     * Constructor
+     * @param params List of construction parameters
+     */
+    SS7M3UA(const NamedList& params);
+
+    /**
+     * Configure and initialize M3UA and its transport
+     * @param config Optional configuration parameters override
+     * @return True if M3UA and the transport were initialized properly
+     */
+    virtual bool initialize(const NamedList* config);
+
+    /**
+     * Push a Message Signal Unit down the protocol stack
+     * @param msu Message data, starting with Service Indicator Octet
+     * @param label Routing label of the MSU to use in routing
+     * @param sls Signalling Link Selection, negative to choose best
+     * @return Link the message was successfully queued to, negative for error
+     */
+    virtual int transmitMSU(const SS7MSU& msu, const SS7Label& label, int sls = -1) = 0;
+
+    /**
+     * Check if the network/linkset is fully operational
+     * @param sls Signalling Link to check, negative to check if any is operational
+     * @return True if the linkset is enabled and operational
+     */
+    virtual bool operational(int sls = -1) const = 0;
+
+
+    /**
+     * Traffic activity state change notification
+     * @param active True if the ASP is active and traffic is allowed
+     */
+    virtual void activeChange(bool active) = 0;
+
+protected:
+    bool m_active;
+
+    int streamId;
+    uint32_t networkAppearance;
+    uint32_t routingContext;
+    uint32_t correlationId;
 };
 
 /**
