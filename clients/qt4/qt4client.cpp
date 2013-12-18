@@ -5,21 +5,18 @@
  * A Qt-4 based universal telephony client
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include "qt4client.h"
@@ -390,6 +387,7 @@ static const String s_propsSave = "_yate_save_props"; // Save properties propert
 static const String s_propColWidths = "_yate_col_widths"; // Column widths
 static const String s_propSorting = "_yate_sorting";  // Table/List sorting
 static const String s_propSizes = "_yate_sizes";      // Size int array
+static const String s_propShowWndWhenActive = "_yate_showwnd_onactive"; // Show another window when a window become active
 static String s_propHHeader = "dynamicHHeader";       // Tables: show/hide the horizontal header
 static String s_propAction = "dynamicAction";         // Prefix for properties that would trigger some action
 static String s_propWindowFlags = "_yate_windowflags"; // Window flags
@@ -405,6 +403,16 @@ ObjList UIBuffer::s_uiCache;
 
 // Values used to configure window title bar and border
 static TokenDict s_windowFlags[] = {
+    // Window type
+    {"popup",              Qt::Popup},
+    {"tool",               Qt::Tool},
+    {"subwindow",          Qt::SubWindow},
+#ifdef _WINDOWS
+    {"notificationtype",   Qt::Tool},
+#else
+    {"notificationtype",   Qt::SubWindow},
+#endif
+    // Window flags
     {"title",              Qt::WindowTitleHint},
     {"sysmenu",            Qt::WindowSystemMenuHint},
     {"maximize",           Qt::WindowMaximizeButtonHint},
@@ -767,6 +775,17 @@ static QList<int> buildIntList(const String& buf, int len = 0)
     return ret;
 }
 
+// Retrieve an object's property
+// Check platform dependent value
+static inline bool getPropPlatform(QObject* obj, const String& name, String& val)
+{
+    if (!(obj && name))
+	return false;
+    if (QtClient::getProperty(obj,name,val))
+	return true;
+    return QtClient::getProperty(obj,name + "_os" + PLATFORM_LOWERCASE_NAME,val);
+}
+
 
 /**
  * Qt4ClientFactory
@@ -957,7 +976,7 @@ UIBuffer* UIBuffer::find(const String& name)
  */
 QtWindow::QtWindow()
     : m_x(0), m_y(0), m_width(0), m_height(0),
-    m_maximized(false), m_mainWindow(false), m_moving(false)
+    m_maximized(false), m_mainWindow(false), m_moving(0)
 {
 }
 
@@ -965,7 +984,7 @@ QtWindow::QtWindow(const char* name, const char* description, const char* alias,
     : QWidget(parent, Qt::Window),
     Window(alias ? alias : name), m_description(description), m_oldId(name),
     m_x(0), m_y(0), m_width(0), m_height(0),
-    m_maximized(false), m_mainWindow(false), m_moving(false)
+    m_maximized(false), m_mainWindow(false), m_moving(0)
 {
     setObjectName(QtClient::setUtf8(m_id));
 }
@@ -2262,6 +2281,9 @@ bool QtWindow::event(QEvent* ev)
     else if (ev->type() == QEvent::WindowActivate) {
 	m_active = true;
 	Client::self()->toggle(this,s_activeChg,true);
+	String wName;
+	if (getPropPlatform(wndWidget(),s_propShowWndWhenActive,wName) && wName)
+	    Client::setVisible(wName);
     }
     else if (ev->type() == QEvent::ApplicationDeactivate) {
 	if (m_active) {
@@ -2672,6 +2694,9 @@ void QtWindow::setVisible(bool visible)
     // Override position for notification windows
     if (visible && isShownNormal() &&
 	QtClient::getBoolProperty(wndWidget(),"_yate_notificationwindow")) {
+	// Don't move
+	m_moving = -1;
+#ifndef Q_WS_MAC
 	// Detect unavailable screen space position and move the window in the apropriate position
 	// bottom/right/none: move it in the right/bottom corner.
 	// top: move it in the right/top corner.
@@ -2685,6 +2710,9 @@ void QtWindow::setVisible(bool visible)
 	    else
 		QtClient::moveWindow(this,QtClient::CornerBottomLeft);
 	}
+#else
+	QtClient::moveWindow(this,QtClient::CornerTopRight);
+#endif
     }
     if (visible && isMinimized())
 	showNormal();
@@ -3209,23 +3237,23 @@ void QtWindow::doInit()
 // Mouse button pressed notification
 void QtWindow::mousePressEvent(QMouseEvent* event)
 {
-    if (Qt::LeftButton == event->button() && isShownNormal()) {
+    if (m_moving >= 0 && Qt::LeftButton == event->button() && isShownNormal()) {
 	m_movePos = event->globalPos();
-	m_moving = true;
+	m_moving = 1;
     }
 }
 
 // Mouse button release notification
 void QtWindow::mouseReleaseEvent(QMouseEvent* event)
 {
-    if (Qt::LeftButton == event->button())
-	m_moving = false;
+    if (m_moving >= 0 && Qt::LeftButton == event->button())
+	m_moving = 0;
 }
 
 // Move the window if the moving flag is set
 void QtWindow::mouseMoveEvent(QMouseEvent* event)
 {
-    if (!m_moving || Qt::LeftButton != event->buttons() || !isShownNormal())
+    if (m_moving <= 0 || Qt::LeftButton != event->buttons() || !isShownNormal())
 	return;
     int cx = event->globalPos().x() - m_movePos.x();
     int cy = event->globalPos().y() - m_movePos.y();

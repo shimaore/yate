@@ -1,19 +1,16 @@
 .\"
 .\" YATE - Yet Another Telephony Engine
 .\"
-.\" This program is free software; you can redistribute it and/or modify
-.\" it under the terms of the GNU General Public License as published by
-.\" the Free Software Foundation; either version 2 of the License, or
-.\" (at your option) any later version.
+.\" This software is distributed under multiple licenses;
+.\" see the COPYING file in the main directory for licensing
+.\" information for this specific distribution.
+.\"
+.\" This use of this software may be subject to additional restrictions.
+.\" See the LEGAL file in the main directory for details.
 .\"
 .\" This program is distributed in the hope that it will be useful,
 .\" but WITHOUT ANY WARRANTY; without even the implied warranty of
-.\" MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-.\" GNU General Public License for more details.
-.\"
-.\" You should have received a copy of the GNU General Public License
-.\" along with this program; if not, write to the Free Software
-.\" Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+.\" MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 .\"
 .\"
 .TH YATE 8 "September 2007" "YATE" "Telephony Engine"
@@ -36,10 +33,10 @@ Display a short help message and exit
 Display program version and exit
 .TP
 .B \-v
-Verbose debugging (you can use more than once)
+Verbose logging (you can use more than once)
 .TP
 .B \-q
-Quieter debugging (you can use more than once)
+Quieter logging (you can use more than once)
 .TP
 .B \-d
 Daemonify, suppress output unless logged
@@ -100,7 +97,7 @@ Abort (coredumps if allowed) if bugs are encountered
 Attempt to debug mutex deadlocks by setting a maximum 10s limit, if repeated halves the limit
 .TP
 .B \-Dd
-Disable some locking debugging and safety features, improves performance instead
+Enable some locking debugging and safety features, degrades performance
 .TP
 .B \-Dl
 Attempt to load modules without having their symbols globally visible

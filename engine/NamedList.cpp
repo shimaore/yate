@@ -3,21 +3,18 @@
  * This file is part of the YATE Project http://YATE.null.ro
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include "yateclass.h"
@@ -83,28 +80,26 @@ NamedList& NamedList::addParam(const char* name, const char* value, bool emptyOK
     return *this;
 }
 
-NamedList& NamedList::setParam(NamedString* param)
+NamedList& NamedList::setParam(const String& name, const char* value)
 {
-    XDebug(DebugInfo,"NamedList::setParam(%p) [\"%s\",\"%s\"]",
-        param,(param ? param->name().c_str() : ""),TelEngine::c_safe(param));
-    if (!param)
-	return *this;
-    ObjList* p = m_params.find(param->name());
+    XDebug(DebugInfo,"NamedList::setParam(\"%s\",\"%s\")",name.c_str(),value);
+    ObjList *p = m_params.skipNull();
+    while (p) {
+        NamedString *s = static_cast<NamedString*>(p->get());
+        if (s->name() == name) {
+            *s = value;
+	    return *this;
+	}
+	ObjList* next = p->skipNext();
+	if (next)
+	    p = next;
+	else
+	    break;
+    }
     if (p)
-	p->set(param);
+	p->append(new NamedString(name,value));
     else
-	m_params.append(param);
-    return *this;
-}
-
-NamedList& NamedList::setParam(const char* name, const char* value)
-{
-    XDebug(DebugInfo,"NamedList::setParam(\"%s\",\"%s\")",name,value);
-    NamedString *s = getParam(name);
-    if (s)
-	*s = value;
-    else
-	m_params.append(new NamedString(name, value));
+	m_params.append(new NamedString(name,value));
     return *this;
 }
 
@@ -197,10 +192,12 @@ NamedList& NamedList::copyParams(const NamedList& original, const String& list, 
     return *this;
 }
 
-NamedList& NamedList::copySubParams(const NamedList& original, const String& prefix, bool skipPrefix)
+NamedList& NamedList::copySubParams(const NamedList& original, const String& prefix,
+    bool skipPrefix, bool replace)
 {
-    XDebug(DebugInfo,"NamedList::copySubParams(%p,\"%s\",%s) [%p]",
-	&original,prefix.c_str(),String::boolText(skipPrefix),this);
+    XDebug(DebugInfo,"NamedList::copySubParams(%p,\"%s\",%s,%s) [%p]",
+	&original,prefix.c_str(),String::boolText(skipPrefix),
+	String::boolText(replace),this);
     if (prefix) {
 	unsigned int offs = skipPrefix ? prefix.length() : 0;
 	ObjList* dest = &m_params;
@@ -208,8 +205,14 @@ NamedList& NamedList::copySubParams(const NamedList& original, const String& pre
 	    const NamedString* s = static_cast<const NamedString*>(l->get());
 	    if (s->name().startsWith(prefix)) {
 		const char* name = s->name().c_str() + offs;
-		if (*name)
+		if (!*name)
+		    continue;
+		if (!replace)
 		    dest = dest->append(new NamedString(name,*s));
+		else if (offs)
+		    setParam(name,*s);
+		else
+		    setParam(s->name(),*s);
 	    }
 	}
     }

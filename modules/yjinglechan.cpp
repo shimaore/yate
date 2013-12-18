@@ -5,22 +5,19 @@
  * Jingle channel
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  * Author: Marian Podgoreanu
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 
@@ -924,6 +921,7 @@ YJGConnection::YJGConnection(Message& msg, const char* caller, const char* calle
 	m_transferFrom.safe(),this);
     // Set timeout and maxcall
     setMaxcall(msg);
+    setMaxPDD(msg);
     if (!available) {
 	u_int64_t timeNow = Time::now();
 	// Save maxcall for later, set presence retrieval timeout instead
@@ -1645,8 +1643,10 @@ bool YJGConnection::handleEvent(JGEvent* event)
 	    if (m_ftStatus == FTNone) {
 		// Non file transfer session
 		// Notify ringing if initiate was confirmed and the remote party doesn't support it
-		if (rspOk && !m_session->hasFeature(XMPPNamespace::JingleAppsRtpInfo))
+		if (rspOk && !m_session->hasFeature(XMPPNamespace::JingleAppsRtpInfo)) {
+		    status("ringing");
 		    Engine::enqueue(message("call.ringing",false,true));
+		}
 	    }
 	    else {
 		// File transfer session
@@ -1863,6 +1863,7 @@ bool YJGConnection::handleEvent(JGEvent* event)
 	case JGSession::ActRinging:
 	    if (m_ftStatus == FTNone) {
 		event->confirmElement();
+		status("ringing");
 		Engine::enqueue(message("call.ringing",false,true));
 	    }
 	    else
@@ -3032,6 +3033,7 @@ void YJGConnection::enqueueCallProgress()
 {
     if (!(m_audioContent && m_audioContent->isEarlyMedia()))
 	return;
+    status("progressing");
     Message* m = message("call.progress");
     String formats;
     m_audioContent->m_rtpMedia.createList(formats,true);
@@ -3872,7 +3874,7 @@ void YJGDriver::initialize()
 	installRelay(Route);
 	installRelay(Update);
 	installRelay(Transfer);
-	installRelay(ImExecute);
+	installRelay(MsgExecute);
 	installRelay(Progress);
 	// Install handlers
 	for (const TokenDict* d = s_msgHandler; d->token; d++) {
@@ -4276,7 +4278,7 @@ bool YJGDriver::msgExecute(Message& msg, String& dest)
 // Message handler: Disconnect channels, destroy streams, clear rosters
 bool YJGDriver::received(Message& msg, int id)
 {
-    if (id == ImExecute)
+    if (id == MsgExecute)
 	return !isModule(msg) && handleImExecute(msg);
     if (id == Execute) {
 	// Client only: handle call.execute with target starting jabber/
@@ -4570,18 +4572,16 @@ bool YJGDriver::handleImExecute(Message& msg)
     // Set local (target) from callto/called parameter
     JabberID local;
     String* callto = msg.getParam("callto");
-    if (TelEngine::null(callto)) {
+    if (TelEngine::null(callto))
 	local.set(msg.getValue("called"));
-	if (local && !local.resource())
-	    local.resource(msg.getValue("called_instance"));
-    }
-    else {
-	if (!callto->startsWith(prefix()))
-	    return false;
+    else if (callto->startsWith(prefix()))
 	local.set(callto->substr(prefix().length()));
-    }
+    else
+        return false;
     if (!local)
 	return false;
+    if (!local.resource())
+	local.resource(msg.getValue("called_instance"));
     Message* m = 0;
     Lock lock(this);
     // Check if target is in our domain(s)

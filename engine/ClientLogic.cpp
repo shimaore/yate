@@ -5,21 +5,18 @@
  * Default client logic
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include "yatecbase.h"
@@ -701,6 +698,7 @@ static const String s_wndChatContact = "chatcontact";   // Chat contact edit/add
 static const String s_wndMucInvite = "mucinvite";       // MUC invite
 static const String s_wndAcountList = "accountlist";    // Accounts list
 static const String s_wndFileTransfer = "fileprogress"; // File transfer
+static const String s_wndNotification = "notification"; // Notifications
 // Some UI widgets
 static const String s_mainwindowTabs = "mainwindowTabs";
 static const String s_channelList = "channels";
@@ -7684,22 +7682,47 @@ bool DefaultLogic::callIncoming(Message& msg, const String& dest)
 bool DefaultLogic::validateCall(NamedList& params, Window* wnd)
 {
     const String& ns = params[YSTRING("target")];
-    if (params[YSTRING("account")] || (ns.find('/') > 0))
+    int pos = ns.find('/');
+    if (pos > 0) {
+	params.clearParam(YSTRING("account"));
+	params.clearParam(YSTRING("protocol"));
+	params.clearParam(YSTRING("line"));
 	return true;
-    else if (params[YSTRING("protocol")]) {
-	if (ns.find('@') <= 0 && ns.find(':') <= 0) {
-	    // set in client the label
-	    Client::self()->setText(YSTRING("callto_hint"),YSTRING("This is not a valid protocol URI."),false,wnd);
-	    return false;
+    }
+    bool accountCleared = false;
+    for (unsigned int i = 0; i < ns.length(); i++) {
+	char c = ns[i];
+	if (c == '@' || c == ':') {
+	    NamedString* tmp = params.getParam(YSTRING("account"));
+	    if (tmp) {
+		accountCleared = true;
+		params.clearParam(tmp);
+		params.clearParam(YSTRING("line"));
+	    }
+	    else {
+		tmp = params.getParam(YSTRING("line"));
+		if (tmp) {
+		    accountCleared = true;
+		    params.clearParam(tmp);
+		}
+	    }
+	    break;
 	}
     }
-    else {
-	// set in client the label
-	Client::self()->setText(YSTRING("callto_hint"),YSTRING("You need a VoIP account to make calls."),false,wnd);
-	return false;
+    if (params[YSTRING("account")])
+	return true;
+    const char* error = 0;
+    if (params[YSTRING("protocol")]) {
+	if (ns.find('@') <= 0 && ns.find(':') <= 0)
+	    error = "This is not a valid protocol URI.";
     }
-
-    return true;
+    else if (accountCleared)
+	error = "Invalid target for selected account.";
+    else
+	error = "You need a VoIP account to make calls.";
+    if (error)
+	Client::self()->setText(YSTRING("callto_hint"),error,false,wnd);
+    return error == 0;
 }
 
 // Start an outgoing call
@@ -8155,21 +8178,24 @@ bool DefaultLogic::callLogUpdate(const NamedList& params, bool save, bool update
 	if (outgoing || dir == YSTRING("outgoing")) {
 	    // Skip if there is no remote party
 	    const String& party = cdrRemoteParty(params,outgoing);
-	    if (party) {
-		NamedList p("");
-		String time;
-		Client::self()->formatDateTime(time,(unsigned int)params.getDoubleValue(YSTRING("time")),
-		    "yyyy.MM.dd hh:mm",false);
-		p.addParam("party",party);
-		p.addParam("party_image",Client::s_skinPath + (outgoing ? "outgoing.png" : "incoming.png"));
-		p.addParam("time",time);
-		time.clear();
-		Client::self()->formatDateTime(time,(unsigned int)params.getDoubleValue(YSTRING("duration")),
-		    "hh:mm:ss",true);
-		p.addParam("duration",time);
-		Client::self()->updateTableRow(s_logList,id,&p);
-	    }
+	    NamedList p("");
+	    String time;
+	    unsigned int t = (unsigned int)params.getDoubleValue(YSTRING("time"));
+	    Client::self()->formatDateTime(time,t,"yyyy.MM.dd hh:mm",false);
+	    p.addParam("party",party);
+	    p.addParam("party_image",Client::s_skinPath +
+		(outgoing ? "outgoing.png" : "incoming.png"));
+	    p.addParam("time",time);
+	    time.clear();
+	    unsigned int d = (unsigned int)params.getDoubleValue(YSTRING("duration"));
+	    Client::self()->formatDateTime(time,d,"hh:mm:ss",true);
+	    p.addParam("duration",time);
+	    Client::self()->updateTableRow(s_logList,id,&p);
 	}
+	else
+	    Debug(ClientDriver::self(),DebugNote,
+		"Failed to add CDR to history, unknown direction='%s'",
+		dir.c_str());
     }
 
     if (!save)
@@ -8971,7 +8997,8 @@ bool DefaultLogic::handleClientChanUpdate(Message& msg, bool& stopLogic)
     if (notif == ClientChannel::Destroyed) {
 	if (!Client::valid())
 	    return false;
-	String id = msg.getValue(YSTRING("id"));
+	const String& id = msg[YSTRING("id")];
+	closeInCallNotification(id);
 	int slave = ClientChannel::lookupSlaveType(msg.getValue("channel_slave_type"));
 	if (slave) {
 	    bool conf = (slave == ClientChannel::SlaveConference);
@@ -9104,6 +9131,7 @@ bool DefaultLogic::handleClientChanUpdate(Message& msg, bool& stopLogic)
 	    if (outgoing) {
 		if (noticed)
 		    Client::self()->ringer(true,false);
+		closeInCallNotification(CHANUPD_ID);
 	    }
 	    else {
 		Client::self()->ringer(true,false);
@@ -9127,6 +9155,7 @@ bool DefaultLogic::handleClientChanUpdate(Message& msg, bool& stopLogic)
 	    if (outgoing) {
 		if (noticed)
 		    Client::self()->ringer(true,false);
+		closeInCallNotification(CHANUPD_ID);
 	    }
 	    else {
 		Client::self()->ringer(true,false);
@@ -9140,6 +9169,7 @@ bool DefaultLogic::handleClientChanUpdate(Message& msg, bool& stopLogic)
 	    // Stop incoming ringer
 	    Client::self()->ringer(true,false);
 	    buildStatus(status,"Call noticed",CHANUPD_ADDR,CHANUPD_ID);
+	    closeInCallNotification(CHANUPD_ID);
 	    break;
 	case ClientChannel::Progressing:
 	    buildStatus(status,"Call progressing",CHANUPD_ADDR,CHANUPD_ID);
@@ -9159,6 +9189,7 @@ bool DefaultLogic::handleClientChanUpdate(Message& msg, bool& stopLogic)
 	    if (outgoing) {
 		addTrayIcon(YSTRING("incomingcall"));
 		Client::self()->setUrgent(s_wndMain,true,Client::self()->getWindow(s_wndMain));
+		showInCallNotification(chan);
 	    }
 	    p.addParam("active:answer",String::boolText(outgoing));
 	    p.addParam("party",chan ? chan->party() : "");
@@ -9180,8 +9211,10 @@ bool DefaultLogic::handleClientChanUpdate(Message& msg, bool& stopLogic)
 	    buildStatus(status,"Calling target",0,0);
 	    break;
 	case ClientChannel::Answered:
-	    if (outgoing)
+	    if (outgoing) {
 		removeTrayIcon(YSTRING("incomingcall"));
+		closeInCallNotification(CHANUPD_ID);
+	    }
 	    buildStatus(status,"Call answered",CHANUPD_ADDR,CHANUPD_ID);
 	    // Stop incoming ringer
 	    Client::self()->ringer(true,false);
@@ -9772,6 +9805,41 @@ void DefaultLogic::engineStart(Message& msg)
 	Client::self()->getBoolOpt(Client::OptAddAccountOnStartup)) {
 	// Start add account wizard
 	s_accWizard->start();
+    }
+}
+
+// Show incoming call notification for a given channel
+void DefaultLogic::showInCallNotification(ClientChannel* chan)
+{
+    if (!(chan && Client::valid()))
+	return;
+    Window* w = Client::self()->getWindow(s_wndNotification);
+    if (!w)
+	return;
+    Client::self()->setVisible(s_wndNotification,false);
+    NamedList p("");
+    p.addParam("context",chan->id());
+    p.addParam("property:answeraction:_yate_identity","answer:" + chan->id());
+    p.addParam("property:hangupaction:_yate_identity","hangup:" + chan->id());
+    String text = "Incoming call";
+    if (chan->party())
+	text << " from " << chan->party();
+    p.addParam("text",text);
+    Client::self()->setParams(&p,w);
+    Client::self()->setVisible(s_wndNotification);
+}
+
+// Close incoming call notification for a given id
+void DefaultLogic::closeInCallNotification(const String& id)
+{
+    if (!(id && Client::valid()))
+	return;
+    Window* w = Client::self()->getWindow(s_wndNotification);
+    if (w && w->context() == id) {
+	NamedList p("");
+	p.addParam("context","");
+	Client::self()->setParams(&p,w);
+	Client::self()->closeWindow(s_wndNotification);
     }
 }
 

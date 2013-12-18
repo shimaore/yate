@@ -3,21 +3,18 @@
  * This file is part of the YATE Project http://YATE.null.ro
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include "yatephone.h"
@@ -123,7 +120,7 @@ bool CallEndpoint::connect(CallEndpoint* peer, const char* reason, bool notify)
 #if 0
     Lock lock(s_mutex,5000000);
     if (!lock.locked()) {
-	Debug(DebugFail,"Call connect failed - timeout on call endpoint mutex owned by '%s'!",s_mutex.owner());
+	Alarm("engine","bug",DebugFail,"Call connect failed - timeout on call endpoint mutex owned by '%s'!",s_mutex.owner());
 	Engine::restart(0);
 	return false;
     }
@@ -162,7 +159,7 @@ bool CallEndpoint::disconnect(bool final, const char* reason, bool notify, const
 
     Lock lock(s_mutex,5000000);
     if (!lock.locked()) {
-	Debug(DebugFail,"Call disconnect failed - timeout on call endpoint mutex owned by '%s'!",s_mutex.owner());
+	Alarm("engine","bug",DebugFail,"Call disconnect failed - timeout on call endpoint mutex owned by '%s'!",s_mutex.owner());
 	Engine::restart(0);
 	return false;
     }
@@ -207,7 +204,7 @@ bool CallEndpoint::getPeerId(String& id) const
 	return false;
     Lock lock(s_mutex,5000000);
     if (!lock.locked()) {
-	Debug(DebugFail,"Peer ID failed - timeout on call endpoint mutex owned by '%s'!",s_mutex.owner());
+	Alarm("engine","bug",DebugFail,"Peer ID failed - timeout on call endpoint mutex owned by '%s'!",s_mutex.owner());
 	Engine::restart(0);
 	return false;
     }
@@ -334,7 +331,7 @@ static Mutex s_paramMutex(true,"ChannelParams");
 Channel::Channel(Driver* driver, const char* id, bool outgoing)
     : CallEndpoint(id),
       m_parameters(""), m_driver(driver), m_outgoing(outgoing),
-      m_timeout(0), m_maxcall(0), m_dtmfTime(0),
+      m_timeout(0), m_maxcall(0), m_maxPDD(0), m_dtmfTime(0),
       m_toutAns(0), m_dtmfSeq(0), m_answered(false)
 {
     init();
@@ -343,7 +340,7 @@ Channel::Channel(Driver* driver, const char* id, bool outgoing)
 Channel::Channel(Driver& driver, const char* id, bool outgoing)
     : CallEndpoint(id),
       m_parameters(""), m_driver(&driver), m_outgoing(outgoing),
-      m_timeout(0), m_maxcall(0), m_dtmfTime(0),
+      m_timeout(0), m_maxcall(0), m_maxPDD(0), m_dtmfTime(0),
       m_toutAns(0), m_dtmfSeq(0), m_answered(false)
 {
     init();
@@ -396,6 +393,7 @@ void Channel::cleanup()
 {
     m_timeout = 0;
     m_maxcall = 0;
+    m_maxPDD = 0;
     status("deleted");
     m_targetid.clear();
     dropChan();
@@ -532,9 +530,12 @@ void Channel::status(const char* newstat)
 	m_answered = true;
 	// stop pre-answer timeout, restart answered timeout
 	m_maxcall = 0;
+	maxPDD(0);
 	if (m_toutAns)
 	    timeout(Time::now() + m_toutAns*(u_int64_t)1000);
     }
+    else if (m_status == YSTRING("ringing") || m_status == YSTRING("progressing"))
+	maxPDD(0);
 }
 
 const char* Channel::direction() const
@@ -564,6 +565,19 @@ void Channel::setMaxcall(const Message* msg, int defTout)
 	else if (tout == 0)
 	    maxcall(0);
     }
+}
+
+void Channel::setMaxPDD(const Message& msg)
+{
+    if (m_answered) {
+	maxPDD(0);
+	return;
+    }
+    int tout = msg.getIntValue(YSTRING("maxpdd"),-1);
+    if (tout > 0)
+	maxPDD(Time::now() + tout * (u_int64_t)1000);
+    else if (tout == 0)
+	maxPDD(0);
 }
 
 void Channel::complete(Message& msg, bool minimal) const
@@ -679,7 +693,7 @@ bool Channel::msgText(Message& msg, const char* text)
 
 bool Channel::msgDrop(Message& msg, const char* reason)
 {
-    m_timeout = m_maxcall = 0;
+    m_timeout = m_maxcall = m_maxPDD = 0;
     status(null(reason) ? "dropped" : reason);
     disconnect(reason,msg);
     return true;
@@ -702,6 +716,7 @@ bool Channel::msgMasquerade(Message& msg)
     if (msg == YSTRING("call.answered")) {
 	Debug(this,DebugInfo,"Masquerading answer operation [%p]",this);
 	m_maxcall = 0;
+	maxPDD(0);
 	m_status = "answered";
     }
     else if (msg == YSTRING("call.progress")) {
@@ -739,6 +754,7 @@ void Channel::msgStatus(Message& msg)
 bool Channel::msgControl(Message& msg)
 {
     setMaxcall(msg);
+    setMaxPDD(msg);
     for (ObjList* o = m_data.skipNull(); o; o = o->skipNext()) {
 	DataEndpoint* dep = static_cast<DataEndpoint*>(o->get());
 	if (dep->control(msg))
@@ -760,7 +776,7 @@ void Channel::statusParams(String& str)
     str << ",targetid=" << m_targetid;
     str << ",address=" << m_address;
     str << ",billid=" << m_billid;
-    if (m_timeout || m_maxcall) {
+    if (m_timeout || m_maxcall || m_maxPDD) {
 	u_int64_t t = Time::now();
 	if (m_timeout) {
 	    str << ",timeout=";
@@ -776,6 +792,13 @@ void Channel::statusParams(String& str)
 	    else
 		str << "expired";
 	}
+	if (m_maxPDD) {
+	    str << ",maxpdd=";
+	    if (m_maxPDD > t)
+		str << (unsigned int)((m_maxPDD - t + 500) / 1000);
+	    else
+		str << "expired";
+	}
     }
 }
 
@@ -785,6 +808,8 @@ void Channel::checkTimers(Message& msg, const Time& tmr)
 	msgDrop(msg,"timeout");
     else if (maxcall() && (maxcall() < tmr))
 	msgDrop(msg,"noanswer");
+    else if (maxPDD() && (maxPDD() < tmr))
+	msgDrop(msg,"postdialdelay");
 }
 
 bool Channel::callPrerouted(Message& msg, bool handled)
@@ -971,8 +996,7 @@ TokenDict Module::s_messages[] = {
     { "chan.locate",     Module::Locate },
     { "chan.transfer",   Module::Transfer },
     { "chan.control",	 Module::Control },
-    { "msg.route",       Module::ImRoute },
-    { "msg.execute",     Module::ImExecute },
+    { "msg.execute",     Module::MsgExecute },
     { 0, 0 }
 };
 

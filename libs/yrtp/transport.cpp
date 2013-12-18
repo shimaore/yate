@@ -4,21 +4,18 @@
  * This file is part of the YATE Project http://YATE.null.ro
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include <yatertp.h>
@@ -28,6 +25,21 @@
 using namespace TelEngine;
 
 static unsigned long s_sleep = 5;
+
+// Set IPv6 sin6_scope_id for remote addresses from local address
+// recvFrom() will set the sin6_scope_id of the remote socket address
+// This will avoid socket address comparison mismatch (same address, different scope id)
+static inline void setScopeId(const SocketAddr& local, SocketAddr& sa1,
+    SocketAddr& sa2, SocketAddr* sa3 = 0)
+{
+    if (local.family() != SocketAddr::IPv6)
+	return;
+    unsigned int val = local.scopeId();
+    sa1.scopeId(val);
+    sa2.scopeId(val);
+    if (sa3)
+	sa3->scopeId(val);
+}
 
 
 RTPGroup::RTPGroup(int msec, Priority prio)
@@ -164,7 +176,8 @@ void RTPProcessor::getStats(String& stats) const
 
 RTPTransport::RTPTransport(RTPTransport::Type type)
     : RTPProcessor(),
-      m_type(type), m_processor(0), m_monitor(0), m_autoRemote(false)
+      m_type(type), m_processor(0), m_monitor(0), m_autoRemote(false),
+      m_warnSendErrorRtp(true), m_warnSendErrorRtcp(true)
 {
     DDebug(DebugAll,"RTPTransport::RTPTransport(%d) [%p]",type,this);
 }
@@ -252,6 +265,39 @@ void RTPTransport::timerTick(const Time& when)
     }
 }
 
+// Send data to remote party
+// Put a debug message on failure
+// Return true if all bytes were sent
+static bool sendData(Socket& sock, const SocketAddr& to, const void* data, int len,
+    const char* what, bool& flag)
+{
+    if (!sock.valid())
+	return false;
+    if (!to.valid()) {
+	if (flag) {
+	    flag = false;
+	    SocketAddr local;
+	    sock.getSockName(local);
+	    Debug(DebugNote,"%s send failed (local=%s): invalid remote address",
+		what,local.addr().c_str());
+	}
+	return false;
+    }
+    int wr = sock.sendTo(data,len,to);
+    if (wr == Socket::socketError() && flag && !sock.canRetry()) {
+	flag = false;
+	// Retrieve the error before calling getSockName() to avoid reset
+	String s;
+	int e = sock.error();
+	Thread::errorString(s,e);
+	SocketAddr local;
+	sock.getSockName(local);
+	Debug(DebugNote,"%s send failed (local=%s remote=%s): %d %s",
+	    what,local.addr().c_str(),to.addr().c_str(),e,s.c_str());
+    }
+    return wr == len;
+}
+
 void RTPTransport::rtpData(const void* data, int len)
 {
     if (!data)
@@ -268,16 +314,14 @@ void RTPTransport::rtpData(const void* data, int len)
 	default:
 	    break;
     }
-    if (m_rtpSock.valid() && m_remoteAddr.valid())
-	m_rtpSock.sendTo(data,len,m_remoteAddr);
+    sendData(m_rtpSock,m_remoteAddr,data,len,"RTP",m_warnSendErrorRtp);
 }
 
 void RTPTransport::rtcpData(const void* data, int len)
 {
     if ((len < 8) || !data)
 	return;
-    if (m_rtcpSock.valid() && m_remoteRTCP.valid())
-	m_rtcpSock.sendTo(data,len,m_remoteRTCP);
+    sendData(m_rtcpSock,m_remoteRTCP,data,len,"RTCP",m_warnSendErrorRtcp);
 }
 
 void RTPTransport::setProcessor(RTPProcessor* processor)
@@ -306,12 +350,15 @@ bool RTPTransport::localAddr(SocketAddr& addr, bool rtcp)
     // for RTCP make sure we don't have a port or it's an even one
     if (rtcp && (p & 1))
 	return false;
+    m_warnSendErrorRtp = true;
+    m_warnSendErrorRtcp = true;
     if (m_rtpSock.create(addr.family(),SOCK_DGRAM) && m_rtpSock.bind(addr)) {
 	m_rtpSock.setBlocking(false);
 	if (!rtcp) {
 	    // RTCP not requested - we are done
 	    m_rtpSock.getSockName(addr);
 	    m_localAddr = addr;
+	    setScopeId(m_localAddr,m_remoteAddr,m_remotePref);
 	    return true;
 	}
 	if (!p) {
@@ -324,6 +371,7 @@ bool RTPTransport::localAddr(SocketAddr& addr, bool rtcp)
 		if (m_rtpSock.create(addr.family(),SOCK_DGRAM) && m_rtpSock.bind(addr)) {
 		    m_rtpSock.setBlocking(false);
 		    m_localAddr = addr;
+		    setScopeId(m_localAddr,m_remoteAddr,m_remoteRTCP,&m_remotePref);
 		    return true;
 		}
 		DDebug(DebugMild,"RTP Socket failed with code %d",m_rtpSock.error());
@@ -337,6 +385,7 @@ bool RTPTransport::localAddr(SocketAddr& addr, bool rtcp)
 	    m_rtcpSock.setBlocking(false);
 	    addr.port(p);
 	    m_localAddr = addr;
+	    setScopeId(m_localAddr,m_remoteAddr,m_remoteRTCP,&m_remotePref);
 	    return true;
 	}
 #ifdef DEBUG
@@ -361,12 +410,15 @@ bool RTPTransport::remoteAddr(SocketAddr& addr, bool sniff)
     // make sure we have a valid address and a port
     // we do not check that it's even numbered as many NAPTs will break that
     if (p && addr.valid()) {
+	m_warnSendErrorRtp = true;
+	m_warnSendErrorRtcp = true;
 	m_remoteAddr = addr;
 	m_remoteRTCP = addr;
 	m_remoteRTCP.port(addr.port()+1);
 	// if sniffing packets from other sources remember preferred address
 	if (sniff)
 	    m_remotePref = addr;
+	setScopeId(m_localAddr,m_remoteAddr,m_remoteRTCP,sniff ? &m_remotePref : 0);
 	return true;
     }
     return false;

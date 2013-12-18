@@ -4,21 +4,18 @@
  * This file is part of the YATE Project http://YATE.null.ro
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2011 Null Team
+ * Copyright (C) 2011-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #ifndef __YATESCRIPT_H
@@ -412,8 +409,7 @@ public:
      * Dump the postfix expression according to current operators dictionary
      * @param res Result string representation of operations
      */
-    inline void dump(String& res) const
-	{ return dump(m_opcodes,res); }
+    virtual void dump(String& res) const;
 
     /**
      * Dump a list of operations according to current operators dictionary
@@ -538,6 +534,20 @@ protected:
      * @return Operator code, OpcNone on failure
      */
     Opcode getOperator(const char*& expr, const TokenDict* operators, bool caseInsensitive = false) const;
+
+    /**
+     * Check if a character can be a letter character in a keyword or identifier
+     * @param c Character to check
+     * @return True if the character can be part of a keyword or identifier
+     */
+    virtual bool keywordLetter(char c) const;
+
+    /**
+     * Check if a character can be can be a digit character in a keyword or identifier
+     * @param c Character to check
+     * @return True if the character can be part of a keyword or identifier
+     */
+    virtual bool keywordDigit(char c) const;
 
     /**
      * Check if a character can be part of a keyword or identifier
@@ -770,11 +780,11 @@ protected:
     /**
      * Add a simple operator to the expression
      * @param oper Operator code to add
-     * @param value Integer value to add
+     * @param value 64 bit nteger value to add
      * @param barrier True to create an evaluator stack barrier
      * @return Newly added operation
      */
-    ExpOperation* addOpcode(Opcode oper, long int value, bool barrier = false);
+    ExpOperation* addOpcode(Opcode oper, int64_t value, bool barrier = false);
 
     /**
      * Add a string constant to the expression
@@ -788,7 +798,7 @@ protected:
      * @param value Integer value to add, will be pushed on execution
      * @return Newly added operation
      */
-    ExpOperation* addOpcode(long int value);
+    ExpOperation* addOpcode(int64_t value);
 
     /**
      * Add a boolean constant to the expression
@@ -805,7 +815,7 @@ protected:
      * @param barrier True to create an exavuator stack barrier
      * @return Newly added operation
      */
-    ExpOperation* addOpcode(Opcode oper, const String& name, long int value = 0, bool barrier = false);
+    ExpOperation* addOpcode(Opcode oper, const String& name, int64_t value = 0, bool barrier = false);
 
     /**
      * Remove from the code and return the last operation
@@ -897,6 +907,11 @@ protected:
     ObjList m_opcodes;
 
     /**
+     * Internally used for faster appending to the operator codes list
+     */
+    ObjList* m_lastOpcode;
+
+    /**
      * Flag that we encountered a parse or compile error
      */
     bool m_inError;
@@ -924,8 +939,8 @@ public:
      * Special value that is not recognized as an integer value
      * @return A value that indicates a non-integer value
      */
-    inline static long int nonInteger()
-	{ return LONG_MIN; }
+    inline static int64_t nonInteger()
+	{ return LLONG_MIN; }
 
     /**
      * Copy constructor
@@ -957,7 +972,7 @@ public:
     inline explicit ExpOperation(const String& value, const char* name = 0, bool autoNum = false)
 	: NamedString(name,value),
 	  m_opcode(ExpEvaluator::OpcPush),
-	  m_number(autoNum ? value.toLong(nonInteger()) : nonInteger()),
+	  m_number(autoNum ? value.toInt64(nonInteger()) : nonInteger()),
 	  m_lineNo(0), m_barrier(false)
 	{ if (autoNum && value.isBoolean()) m_number = value.toBoolean() ? 1 : 0; }
 
@@ -972,15 +987,15 @@ public:
 	{ }
 
     /**
-     * Push Number constructor
+     * Push 64 bit Number constructor
      * @param value Integer constant to push on stack on execution
      * @param name Optional of the newly created constant
      */
-    inline explicit ExpOperation(long int value, const char* name = 0)
+    inline explicit ExpOperation(int64_t value, const char* name = 0)
 	: NamedString(name,"NaN"),
 	  m_opcode(ExpEvaluator::OpcPush),
 	  m_number(value), m_lineNo(0), m_barrier(false)
-	{ if (value != nonInteger()) String::operator=((int)value); }
+	{ if (value != nonInteger()) String::operator=(value); }
 
     /**
      * Push Boolean constructor
@@ -1000,7 +1015,7 @@ public:
      * @param value Optional integer constant used as function parameter count
      * @param barrier True if the operation is an expression barrier on the stack
      */
-    inline ExpOperation(ExpEvaluator::Opcode oper, const char* name = 0, long int value = nonInteger(), bool barrier = false)
+    inline ExpOperation(ExpEvaluator::Opcode oper, const char* name = 0, int64_t value = nonInteger(), bool barrier = false)
 	: NamedString(name,""),
 	  m_opcode(oper), m_number(value), m_lineNo(0), m_barrier(barrier)
 	{ }
@@ -1015,6 +1030,19 @@ public:
     inline ExpOperation(ExpEvaluator::Opcode oper, const char* name, const char* value, bool barrier = false)
 	: NamedString(name,value),
 	  m_opcode(oper), m_number(nonInteger()), m_lineNo(0), m_barrier(barrier)
+	{ }
+
+    /**
+     * Constructor from components
+     * @param oper Operation code
+     * @param name Optional name of the operation or result
+     * @param value String value of operation
+     * @param number Integer value
+     * @param barrier True if the operation is an expression barrier on the stack
+     */
+    inline ExpOperation(ExpEvaluator::Opcode oper, const char* name, const char* value, int64_t number, bool barrier)
+	: NamedString(name,value),
+	  m_opcode(oper), m_number(number), m_lineNo(0), m_barrier(barrier)
 	{ }
 
     /**
@@ -1035,7 +1063,7 @@ public:
      * Retrieve the number stored in this operation
      * @return Stored number
      */
-    inline long int number() const
+    inline int64_t number() const
 	{ return m_number; }
 
     /**
@@ -1064,14 +1092,14 @@ public:
      * @param num Numeric value to assign to the operation
      * @return Assigned number
      */
-    inline long int operator=(long int num)
-	{ m_number = num; String::operator=((int)num); return num; }
+    inline int64_t operator=(int64_t num)
+	{ m_number = num; String::operator=(num); return num; }
 
     /**
      * Retrieve the numeric value of the operation
      * @return Number contained in operation, zero if not a number
      */
-    virtual long int valInteger() const;
+    virtual int64_t valInteger() const;
 
     /**
      * Retrieve the boolean value of the operation
@@ -1109,7 +1137,7 @@ public:
 
 private:
     ExpEvaluator::Opcode m_opcode;
-    long int m_number;
+    int64_t m_number;
     unsigned int m_lineNo;
     bool m_barrier;
 };
@@ -1126,9 +1154,10 @@ public:
      * Constructor
      * @param name Name of the function
      * @param argc Number of arguments expected by function
+     * @param barrier True if the function is an expression barrier on the stack
      */
-    inline ExpFunction(const char* name, long int argc = 0)
-	: ExpOperation(ExpEvaluator::OpcFunc,name,argc)
+    inline ExpFunction(const char* name, long int argc = 0, bool barrier = false)
+	: ExpOperation(ExpEvaluator::OpcFunc,name,argc,barrier)
 	{ if (name) (*this) << "[function " << name << "()]"; }
 
     /**
@@ -1723,9 +1752,10 @@ public:
      * @param text Source code text
      * @param fragment True if the code is just an included fragment
      * @param file Name of the file that is being parsed
+     * @param len Length of text, negative if unknown
      * @return True if the text was successfully parsed
      */
-    virtual bool parse(const char* text, bool fragment = false, const char* file = 0) = 0;
+    virtual bool parse(const char* text, bool fragment = false, const char* file = 0, int len = -1) = 0;
 
     /**
      * Parse a file as script source code
@@ -1815,6 +1845,14 @@ public:
      * @param frozen True if the object is to be frozen from creation
      */
     JsObject(const char* name = "Object", Mutex* mtx = 0, bool frozen = false);
+
+    /**
+     * Constructor for an empty object
+     * @param mtx Pointer to the mutex that serializes this object
+     * @param name Full name of the object
+     * @param frozen True if the object is to be frozen from creation
+     */
+    JsObject(Mutex* mtx, const char* name, bool frozen = false);
 
     /**
      * Destructor
@@ -2022,14 +2060,6 @@ public:
 
 protected:
     /**
-     * Constructor for an empty object
-     * @param mtx Pointer to the mutex that serializes this object
-     * @param name Full name of the object
-     * @param frozen True if the object is to be frozen from creation
-     */
-    JsObject(Mutex* mtx, const char* name, bool frozen = false);
-
-    /**
      * Try to evaluate a single native method
      * @param stack Evaluation stack in use, parameters are popped off this stack
      *  and results are pushed back on stack
@@ -2166,11 +2196,28 @@ public:
     JsArray(Mutex* mtx = 0);
 
     /**
+     * Constructor for an empty array
+     * @param mtx Pointer to the mutex that serializes this object
+     * @param name Full name of the object
+     * @param frozen True if the object is to be frozen from creation
+     */
+    inline JsArray(Mutex* mtx, const char* name, bool frozen = false)
+	: JsObject(mtx,name,frozen), m_length(0)
+	{ }
+
+    /**
      * Retrieve the length of the array
      * @return Number of numerically indexed objects in array
      */
-    inline long length() const
+    inline int32_t length() const
 	{ return m_length; }
+
+    /**
+     * Set the internal length to a specific value
+     * @param len Length of array to set
+     */
+    inline void setLength(int32_t len)
+	{ m_length = len; }
 
     /**
      * Add an item at the end of the array
@@ -2185,17 +2232,26 @@ public:
      */
     virtual JsObject* copy(Mutex* mtx) const;
 
-protected:
-    /*
-     * Constructor for an empty array
-     * @param mtx Pointer to the mutex that serializes this object
-     * @param name Full name of the object
-     * @param frozen True if the object is to be frozen from creation
+    /**
+     * Try to assign a value to a single field if object is not frozen and update array length.
+     * Reimplemented from JsObject
+     * @param stack Evaluation stack in use
+     * @param oper Field to assign to, contains the field name and new value
+     * @param context Pointer to arbitrary object passed from evaluation methods
+     * @return True if assignment succeeded
      */
-    inline JsArray(Mutex* mtx, const char* name, bool frozen = false)
-	: JsObject(mtx,name,frozen), m_length(0)
-	{ }
+    virtual bool runAssign(ObjList& stack, const ExpOperation& oper, GenObject* context);
 
+    /**
+     * Try to evaluate a single field
+     * @param stack Evaluation stack in use, field value must be pushed on it
+     * @param oper Field to evaluate
+     * @param context Pointer to arbitrary object passed from evaluation methods
+     * @return True if evaluation succeeded
+     */
+    virtual bool runField(ObjList& stack, const ExpOperation& oper, GenObject* context);
+
+protected:
     /**
      * Clone and rename method
      * @param name Name of the cloned object
@@ -2214,24 +2270,11 @@ protected:
      */
     bool runNative(ObjList& stack, const ExpOperation& oper, GenObject* context);
 
-    /**
-     * Synchronize the "length" parameter to the internally stored length
-     */
-    inline void setLength()
-	{ params().setParam("length",String((int)m_length)); }
-
-    /**
-     * Set the internal length and the "length" parameter to a specific value
-     * @param len Length of array to set
-     */
-    inline void setLength(long len)
-	{ m_length = len; params().setParam("length",String((int)len)); }
-
 private:
     bool runNativeSlice(ObjList& stack, const ExpOperation& oper, GenObject* context);
     bool runNativeSplice(ObjList& stack, const ExpOperation& oper, GenObject* context);
     bool runNativeSort(ObjList& stack, const ExpOperation& oper, GenObject* context);
-    long m_length;
+    int32_t m_length;
 };
 
 /**
@@ -2320,9 +2363,10 @@ public:
      * @param text Source code text
      * @param fragment True if the code is just an included fragment
      * @param file Name of the file that is being parsed
+     * @param len Length of text, negative if unknown
      * @return True if the text was successfully parsed
      */
-    virtual bool parse(const char* text, bool fragment = false, const char* file = 0);
+    virtual bool parse(const char* text, bool fragment = false, const char* file = 0, int len = -1);
 
     /**
      * Create a context adequate for Javascript code
@@ -2369,11 +2413,34 @@ public:
 	{ return m_basePath; }
 
     /**
-     * Set the pase script path
+     * Set the base script path
      * @param path Base path to add to relative script paths
      */
     inline void basePath(const char* path)
 	{ m_basePath = path; }
+
+    /**
+     * Retrieve the last parsed file name
+     * @return Name of the successfully parsed file or an empty String
+     */
+    inline const String& parsedFile() const
+	{ return m_parsedFile; }
+
+    /**
+     * Check if the script or any includes have changed
+     * @param file Name of the file to check
+     * @return True if the script may have changed, false if not changed
+     */
+    bool scriptChanged(const char* file) const;
+
+    /**
+     * Check if the script or any includes have changed
+     * @param file Name of the file to check
+     * @param path New base path to check
+     * @return True if the script may have changed, false if not changed
+     */
+    inline bool scriptChanged(const char* file, const String& path) const
+	{ return (path != m_basePath) || scriptChanged(file); }
 
     /**
      * Set whether the Javascript code should be linked or not
@@ -2426,6 +2493,7 @@ public:
 
 private:
     String m_basePath;
+    String m_parsedFile;
     bool m_allowLink;
     bool m_allowTrace;
 };

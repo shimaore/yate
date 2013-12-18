@@ -17,6 +17,12 @@
 ;  UDP transport (if type is udp)
 ; The listener is always processed before other 'listener ' sections
 
+; ipv6_support: boolean: Enable or disable IPv6 support
+; This parameter is applied on reload
+; This parameter is ignored if yate was not built with IPv6 support
+; Defaults to no
+;ipv6_support=no
+
 ; type: keyword: Listener type
 ; Allowed values:
 ; udp: Build an UDP listener
@@ -31,11 +37,18 @@
 
 ; addr: ipaddress: IP address to bind to
 ; Leave it empty to listen on all available interfaces
+; IPv6: An interface name can be added at the end of the address to bind on a specific
+;  interface. This is mandatory for Link Local addresses (e.g. addr=fe80::1%eth0)
 ;addr=
 
 ; port: integer: Port to bind to
 ; Defaults to 5060 for UDP and TCP, 5061 for TLS listener
 ;port=5060
+
+; ipv6: boolean: Listen on IPv6 address(es)
+; Listen will fail if IPv6 support is not enabled or not supported
+; Defaults to no
+;ipv6=no
 
 ; udp_force_bind: boolean: Try to use a random port if failed to bind on configured one (UDP only)
 ; Defaults to yes
@@ -46,6 +59,8 @@
 ; TCP/TLS: this parameter is applied on reload for new connections only
 ; RTP local IP address will default to bound IP address if not binding on all interfaces
 ; Explicitly set it to empty string to avoid using bound IP address
+; IPv6: An interface name can be added at the end of the address to bind on a specific
+;  interface. This is mandatory for Link Local addresses (e.g. addr=fe80::1%eth0)
 ;rtp_localip=
 
 ; nat_address: ipaddress: IP address to advertise in SDP, empty to use the local RTP
@@ -79,6 +94,8 @@
 ; tcp_out_rtp_localip: ipaddress: IP address to bind local RTP to for outgoing
 ;  TCP connections, empty to guess best
 ; This parameter is applied on reload for new connections only
+; IPv6: An interface name can be added at the end of the address to bind on a specific
+;  interface. This is mandatory for Link Local addresses (e.g. addr=fe80::1%eth0)
 ;tcp_out_rtp_localip=
 
 ; thread: keyword: Default priority of the SIP handling threads
@@ -112,9 +129,11 @@
 ;transfer=enable in server mode, disable in client mode
 
 ; registrar: bool: Allow the SIP module to receive registration requests
+; OBSOLETE - please use "enable" in section [registar]
 ;registrar=enable in server mode, disable in client mode
 
 ; options: bool: Build and send a default 200 answer to OPTIONS requests
+; OBSOLETE - please use "enable" in section [options]
 ;options=enable
 
 ; prack: bool: Enable acknowledging provisional 1xx answers (RFC 3262)
@@ -124,6 +143,7 @@
 ;info=enable
 
 ; fork: bool: Follow first forked 2xx answer on early dialogs
+; This parameter is applied on reload
 ;fork=enable
 
 ; progress: bool: Send an "183 Session Progress" just after successfull routing
@@ -141,7 +161,21 @@
 
 ; lazy100: bool: Do not generate an initial "100 Trying" for non-INVITE
 ;  transactions unless a retransmission arrives before having a final answer
+; This parameter is applied on reload
 ;lazy100=no
+
+; t1: int: Value of SIP T1 timer in milliseconds
+; This is the RTT Estimate and several other SIP timers are derived from it
+; Valid values are between 100 and 5000, outside range uses the default of 500
+; This parameter is applied on reload
+;t1=500
+
+; t4: int: Value of SIP T4 timer in milliseconds
+; This is the maximum message lifetime, several other SIP timers are derived from it
+; It is enforced to be at least 3 * T1
+; Valid values are between 1000 and 25000, outside range uses the default of 5000
+; This parameter is applied on reload
+;t4=5000
 
 ; check_allow_info: bool: Check 'Allow' header in INVITE and OK for INFO support
 ; If enabled and INFO is not supported the 'info' dtmf method will be disabled
@@ -217,6 +251,7 @@
 ;preventive_bye=enable
 
 ; auth_foreign: bool: Attempt to authenticate nonces not generated locally
+; This parameter is applied on reload
 ;auth_foreign=disable
 
 ; body_encoding: keyword: Encoding used for received generic binary bodies
@@ -279,8 +314,18 @@
 ;printmsg=yes
 
 
+[options]
+; Controls the behaviour for SIP options retrieval
+
+; enable: bool: Allow the SIP module to receive OPTIONS requests
+;enable=yes
+
+
 [registrar]
 ; Controls the behaviour when acting as registrar
+
+; enable: bool: Allow the SIP module to receive registration requests
+;enable=yes in server mode, no in client mode
 
 ; expires_min: int: Minimum allowed expiration time in seconds
 ;expires_min=60
@@ -298,6 +343,19 @@
 ;nat_refresh=25
 
 ; async_process: bool: Process registrations asynchronously in their own thread
+;async_process=enable
+
+
+[message]
+; Controls the behaviour for SIP messaging
+
+; enable: bool: Allow the SIP module to receive MESSAGE requests
+;enable=no
+
+; auth_required: bool: Automatically challenge all senders for authentication
+;auth_required=enable
+
+; async_process: bool: Process SIP MESSAGE asynchronously in their own thread
 ;async_process=enable
 
 
@@ -430,17 +488,26 @@
 
 ; addr: ipaddress: IP address to bind to
 ; Leave it empty to listen on all available interfaces
+; IPv6: An interface name can be added at the end of the address to bind on a specific
+;  interface. This is mandatory for Link Local addresses (e.g. addr=fe80::1%eth0)
 ;addr=
 
 ; port: integer: Port to bind to
 ; Defaults to 5060 for UDP and TCP, 5061 for TLS listeners
 ;port=
 
+; ipv6: boolean: Listen on IPv6 address(es)
+; Listen will fail if IPv6 support is not enabled or not supported
+; Defaults to no
+;ipv6=no
+
 ; rtp_localip: ipaddress: IP address to bind local RTP to
 ; This parameter is applied on reload
 ; TCP/TLS: this parameter is applied on reload for new connections only
 ; RTP local IP address will default to bound IP address if not binding on all interfaces
 ; Explicitly set it to empty string to avoid using bound IP address
+; IPv6: An interface name can be added at the end of the address to bind on a specific
+;  interface. This is mandatory for Link Local addresses (e.g. addr=fe80::1%eth0)
 ;rtp_localip=
 
 ; backlog: integer: Maximum length of the queue of pending connections

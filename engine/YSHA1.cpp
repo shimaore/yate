@@ -9,21 +9,18 @@
  * Adapted for YATE by Paul Chitescu
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include "yateclass.h"
@@ -197,30 +194,25 @@ static void sha1_final(sha1_ctx *sctx, u_int8_t *out)
 using namespace TelEngine;
 
 SHA1::SHA1()
-    : m_private(0)
 {
 }
 
 SHA1::SHA1(const void* buf, unsigned int len)
-    : m_private(0)
 {
     update(buf,len);
 }
 
 SHA1::SHA1(const DataBlock& data)
-    : m_private(0)
 {
     update(data);
 }
 
 SHA1::SHA1(const String& str)
-    : m_private(0)
 {
     update(str);
 }
 
 SHA1::SHA1(const SHA1& original)
-    : m_private(0)
 {
     m_hex = original.m_hex;
     ::memcpy(m_bin,original.m_bin,sizeof(m_bin));
@@ -275,7 +267,7 @@ void SHA1::finalize()
     m_hex.hexify(m_bin,sizeof(m_bin));
 }
 
-bool SHA1::update(const void* buf, unsigned int len)
+bool SHA1::updateInternal(const void* buf, unsigned int len)
 {
     // Don't update an already finalized digest
     if (m_hex)
@@ -289,23 +281,10 @@ bool SHA1::update(const void* buf, unsigned int len)
     return true;
 }
 
-SHA1& SHA1::operator<<(const char* value)
-{
-    if (!null(value))
-	update(value,::strlen(value));
-    return *this;
-}
-
 const unsigned char* SHA1::rawDigest()
 {
     finalize();
     return m_bin;
-}
-
-const String& SHA1::hexDigest()
-{
-    finalize();
-    return m_hex;
 }
 
 /* vi: set ts=8 sw=4 sts=4 noet: */

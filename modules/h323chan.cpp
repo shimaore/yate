@@ -11,21 +11,18 @@
  * H.323 channel
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include <ptlib.h>
@@ -82,6 +79,12 @@
 #if (OPENH323_NUMVERSION >= 12000)
 typedef PBoolean BOOL;
 #endif
+
+// These defines collide with DSCP service classes
+#undef CS4
+#undef CS5
+#undef CS6
+#undef CS7
 
 #include <yatephone.h>
 #include <yateversn.h>
@@ -246,6 +249,12 @@ static int cleaningCount()
 {
     Lock lock(s_mutex);
     return s_connCount - s_chanCount;
+}
+
+static bool cleaningBusy()
+{
+    int maxc = s_maxCleaning;
+    return (maxc > 0) && (cleaningCount() > maxc);
 }
 
 class H323Process : public PProcess
@@ -873,6 +882,18 @@ static inline unsigned int threadIdleIntervals(u_int64_t periodUs)
     return (unsigned int)((periodUs + us - 1) / us);
 }
 
+// Emit an alarm when refusing a new call but not more often than every 10s
+static void congestedWarn(const char* msg)
+{
+    static uint64_t s_alarmTime = 0;
+    if (s_alarmTime > Time::now())
+	Debug(&hplugin,DebugWarn,"%s",msg);
+    else {
+	Alarm(&hplugin,"performance",DebugWarn,"%s",msg);
+	s_alarmTime = Time::now() + 10000000;
+    }
+}
+
 // shameless adaptation from the G711 capability declaration
 #define DEFINE_YATE_CAPAB(cls,base,param,name) \
 class cls : public base { \
@@ -960,7 +981,7 @@ BOOL YateGatekeeperServer::Init()
 	if (AddListener(new H323GatekeeperListener(m_endpoint,*this,name,trans)))
 	    Debug(&hplugin,DebugAll,"Started Gk listener on %s:%d",addr,port);
 	else
-	    Debug(&hplugin,DebugGoOn,"Can't start the Gk listener for address: %s",addr);
+	    Alarm(&hplugin,"config",DebugGoOn,"Can't start the Gk listener for address: %s",addr);
     }
     i = s_cfg.getIntValue("gk","ttl",600);
     if (i > 0) {
@@ -1013,7 +1034,7 @@ H323Connection* YateH323EndPoint::yateMakeCall(const PString& remoteParty,
 {
     // Sync with gatekeeper changing flag
     if (!startUsingGk(false)) {
-	Debug(DebugWarn,"Refusing new outgoing H.323 call, gatekeeper busy");
+	congestedWarn("Refusing new outgoing H.323 call, gatekeeper busy");
 	return 0;
     }
     token = PString::Empty();
@@ -1028,21 +1049,18 @@ H323Connection* YateH323EndPoint::yateMakeCall(const PString& remoteParty,
 H323Connection* YateH323EndPoint::CreateConnection(unsigned callReference,
     void* userData, H323Transport* transport, H323SignalPDU* setupPDU)
 {
-    if (s_maxCleaning > 0) {
-	// check if there aren't too many connections assigned to the cleaner thread
-	int cln = cleaningCount();
-	if (cln > s_maxCleaning) {
-	    Debug(DebugWarn,"Refusing new H.323 call, there are already %d cleaning up",cln);
-	    return 0;
-	}
+    // check if there aren't too many connections assigned to the cleaner thread
+    if (cleaningBusy()) {
+	congestedWarn("Refusing new H.323 call, too many cleaning up");
+	return 0;
     }
     if (!hplugin.canAccept(userData == 0)) {
-	Debug(DebugWarn,"Refusing new H.323 call, full or exiting");
+	congestedWarn("Refusing new H.323 call, full or exiting");
 	return 0;
     }
     // Incoming call, sync with gatekeeper changing flag
     if (!userData && !startUsingGk(false)) {
-	Debug(DebugWarn,"Refusing new incoming H.323 call, gatekeeper busy");
+	congestedWarn("Refusing new incoming H.323 call, gatekeeper busy");
 	return 0;
     }
     Lock mylock(this);
@@ -1093,7 +1111,7 @@ bool YateH323EndPoint::Init(bool reg, const NamedList* params)
     else if (m_client && reg && !m_registered)
 	internalGkNotify(false,"Gatekeeper busy");
     if (!ok)
-	Debug(&hplugin,DebugNote,"Endpoint(%s) failed to init%s [%p]",safe(),
+	Alarm(&hplugin,"config",DebugWarn,"Endpoint(%s) failed to init%s [%p]",safe(),
 	    started ? "" : ": gatekeeper busy",this);
     return ok;
 }
@@ -1607,7 +1625,7 @@ bool YateH323EndPoint::checkListener(const NamedList* params, bool& changed)
 	return true;
     }
     if (retries)
-	Debug(&hplugin,DebugGoOn,"Endpoint(%s) unable to start H323 Listener on %s [%p]",
+	Alarm(&hplugin,"config",DebugGoOn,"Endpoint(%s) unable to start H323 Listener on %s [%p]",
 	    safe(),(const char*)addr.AsString(),this);
     String reason = "Cannot listen on ";
     reason << m_listenAddr << ":" << m_listenPort;
@@ -1692,6 +1710,11 @@ void YateGkRegThread::Main()
 // make a call either normally or in a proxy PWlib thread
 bool YateCallThread::makeCall(YateH323EndPoint* ep, const char* remoteParty, void* userData, bool newThread)
 {
+    // check if there aren't too many connections assigned to the cleaner thread
+    if (cleaningBusy()) {
+	congestedWarn("Refusing new outgoing H.323 call, too many cleaning up");
+	return false;
+    }
     if (!newThread) {
 	PString token;
 	return ep->yateMakeCall(remoteParty,token,userData) != 0;
@@ -2828,6 +2851,8 @@ YateH323Chan::YateH323Chan(YateH323Connection* conn,Message* msg,const char* add
     Debug(this,DebugAll,"YateH323Chan::YateH323Chan(%p,%s) %s [%p]",
 	conn,addr,direction(),this);
     setMaxcall(msg);
+    if (msg)
+	setMaxPDD(*msg);
     Message* s = message("chan.startup",msg);
     s_cfgMutex.lock();
     m_dtmfMethods = s_dtmfMethods;

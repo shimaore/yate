@@ -4,21 +4,18 @@
  * This file is part of the YATE Project http://YATE.null.ro
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #ifndef __YATERTP_H
@@ -345,6 +342,8 @@ private:
     SocketAddr m_rxAddrRTP;
     SocketAddr m_rxAddrRTCP;
     bool m_autoRemote;
+    bool m_warnSendErrorRtp;
+    bool m_warnSendErrorRtcp;
 };
 
 /**
@@ -613,7 +612,7 @@ public:
     inline RTPReceiver(RTPSession* session = 0)
 	: RTPBaseIO(session),
 	  m_ioLostPkt(0), m_dejitter(0),
-	  m_seqSync(0), m_seqCount(0), m_warn(true),
+	  m_seqSync(0), m_seqCount(0), m_warn(true), m_warnSeq(1),
 	  m_seqLost(0), m_wrongSSRC(0), m_syncLost(0)
 	{ }
 
@@ -748,6 +747,7 @@ private:
     u_int16_t m_seqSync;
     u_int16_t m_seqCount;
     bool m_warn;
+    int m_warnSeq;                       // Warn on invalid sequence (1: DebugWarn, -1: DebugInfo)
     unsigned int m_seqLost;
     unsigned int m_wrongSSRC;
     unsigned int m_syncLost;
@@ -1296,6 +1296,14 @@ public:
      */
     virtual void incWrongSrc();
 
+    /**
+     * Set the packet with invalid sequence warn mode
+     * @param on True to show a message at DebugWarn level,
+     *  false to show at DebugInfo level
+     */
+    inline void setWarnSeq(bool on)
+	{ m_warnSeq = on ? 1 : -1; }
+
 protected:
     /**
      * Method called periodically to push any asynchronous data or statistics
@@ -1321,6 +1329,7 @@ private:
     RTPSecure* m_secure;
     u_int64_t m_reportTime;
     u_int64_t m_reportInterval;
+    int m_warnSeq;                       // Warn on invalid sequence (1: DebugWarn, -1: DebugInfo)
 };
 
 /**

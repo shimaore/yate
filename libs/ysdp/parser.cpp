@@ -5,21 +5,18 @@
  * SDP media handling
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2009 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include <yatesdp.h>
@@ -106,7 +103,14 @@ ObjList* SDPParser::parse(const MimeSdpBody& sdp, String& addr, ObjList* oldMedi
 	if (tmp.startSkip("IN IP4")) {
 	    tmp.trimBlanks();
 	    // Handle the case media is muted
-	    if (tmp == YSTRING("0.0.0.0"))
+	    if (tmp == SocketAddr::ipv4NullAddr())
+		tmp.clear();
+	    addr = tmp;
+	}
+	else if (tmp.startSkip("IN IP6")) {
+	    tmp.trimBlanks();
+	    // Handle the case media is muted
+	    if (tmp == SocketAddr::ipv6NullAddr())
 		tmp.clear();
 	    addr = tmp;
 	}
@@ -247,9 +251,13 @@ ObjList* SDPParser::parse(const MimeSdpBody& sdp, String& addr, ObjList* oldMedi
 		const char* forced = m_hacks.getValue("ilbc_forced");
 		if (forced)
 		    payload = forced;
-		else if ((mode == 20) || (ptime == 20))
+		else if (mode == 20)
 		    payload = "ilbc20";
-		else if ((mode == 30) || (ptime == 30))
+		else if (mode == 30)
+		    payload = "ilbc30";
+		else if ((ptime % 30) && !(ptime % 20))
+		    payload = "ilbc20";
+		else if ((ptime % 20) && !(ptime % 30))
 		    payload = "ilbc30";
 		else
 		    payload = m_hacks.getValue(YSTRING("ilbc_default"),"ilbc30");
@@ -325,11 +333,13 @@ void SDPParser::initialize(const NamedList* codecs, const NamedList* hacks, cons
 		m_audioFormats.append(fmt,",");
 	}
     }
-    if (!m_audioFormats) {
-	Debug(this,DebugWarn,"No default audio codecs, using defaults");
+    if (m_audioFormats)
+	Debug(this,DebugAll,"Initialized audio codecs: %s",m_audioFormats.c_str());
+    else {
 	m_audioFormats = "alaw,mulaw";
+	Debug(this,DebugWarn,"No default audio codecs, using defaults: %s",
+	    m_audioFormats.c_str());
     }
-    DDebug(this,DebugNote,"Default audio codecs: %s",m_audioFormats.c_str());
     m_ignorePort = m_hacks.getBoolValue("ignore_sdp_port",false);
     m_rfc2833 = 101;
     m_secure = false;

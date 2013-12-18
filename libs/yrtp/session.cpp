@@ -4,21 +4,18 @@
  * This file is part of the YATE Project http://YATE.null.ro
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include <yatertp.h>
@@ -234,7 +231,10 @@ void RTPReceiver::rtpData(const void* data, int len)
 			m_seq = seq;
 			m_ts = ts - m_tsLast;
 			m_seqCount = 0;
-			m_warn = true;
+			if (m_warnSeq > 0)
+			    m_warn = true;
+			else
+			    m_warnSeq = -1;
 			m_syncLost++;
 			if (m_dejitter)
 			    m_dejitter->clear();
@@ -248,9 +248,15 @@ void RTPReceiver::rtpData(const void* data, int len)
 	    else
 		m_seqSync = seq;
 	}
-	if (m_warn) {
-	    m_warn = false;
-	    Debug(DebugWarn,"RTP received SEQ %u while current is %u [%p]",seq,m_seq,this);
+	if (m_warnSeq > 0) {
+	    if (m_warn) {
+		m_warn = false;
+		Debug(DebugWarn,"RTP received SEQ %u while current is %u [%p]",seq,m_seq,this);
+	    }
+	}
+	else if (m_warnSeq < 0) {
+	    m_warnSeq = 0;
+	    Debug(DebugInfo,"RTP received SEQ %u while current is %u [%p]",seq,m_seq,this);
 	}
 	return;
     }
@@ -407,7 +413,7 @@ RTPSender::RTPSender(RTPSession* session, bool randomTs)
     if (randomTs) {
 	m_ts = Random::random() & ~1;
 	// avoid starting sequence numbers too close to zero
-	m_seq = 2500 + (Random::random() % 60000);
+	m_seq = (uint16_t)(2500 + (Random::random() % 60000));
     }
 }
 
@@ -659,7 +665,8 @@ RTPSession::RTPSession()
     : Mutex(true,"RTPSession"),
       m_direction(FullStop),
       m_send(0), m_recv(0), m_secure(0),
-      m_reportTime(0), m_reportInterval(0)
+      m_reportTime(0), m_reportInterval(0),
+      m_warnSeq(1)
 {
     DDebug(DebugInfo,"RTPSession::RTPSession() [%p]",this);
 }
@@ -802,6 +809,8 @@ void RTPSession::receiver(RTPReceiver* recv)
     m_recv = recv;
     if (tmp)
 	delete tmp;
+    if (m_recv)
+	m_recv->m_warnSeq = m_warnSeq;
 }
 
 void RTPSession::security(RTPSecure* secure)
@@ -926,8 +935,8 @@ void RTPSession::sendRtcpReport(const Time& when)
 	// Include a sender report
 	buf[1] = 0xc8; // SR
 	// NTP timestamp
-	store32(buf,len,2208988800 + (when.usec() / 1000000));
-	store32(buf,len,((when.usec() % 1000000) << 32) / 1000000);
+	store32(buf,len,(uint32_t)(2208988800 + (when.usec() / 1000000)));
+	store32(buf,len,(uint32_t)(((when.usec() % 1000000) << 32) / 1000000));
 	// RTP timestamp
 	store32(buf,len,m_send->tsLast());
 	// Packet and octet counters
@@ -941,7 +950,7 @@ void RTPSession::sendRtcpReport(const Time& when)
 	u_int32_t lost = m_recv->ioPacketsLost();
 	u_int32_t lostf = 0xff & (lost * 255 / (lost + m_recv->ioPackets()));
 	store32(buf,len,(lost & 0xffffff) | (lostf << 24));
-	store32(buf,len,m_recv->fullSeq());
+	store32(buf,len,(uint32_t)m_recv->fullSeq());
 	// TODO: Compute and store Jitter, LSR and DLSR
 	store32(buf,len,0);
 	store32(buf,len,0);

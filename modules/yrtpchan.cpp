@@ -5,21 +5,18 @@
  * RTP channel - also acts as data helper for other protocols
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 
@@ -78,14 +75,7 @@ static TokenDict dict_yrtp_dir[] = {
     { 0 , 0 },
 };
 
-static TokenDict dict_tos[] = {
-    { "lowdelay", Socket::LowDelay },
-    { "throughput", Socket::MaxThroughput },
-    { "reliability", Socket::MaxReliability },
-    { "mincost", Socket::MinCost },
-    { 0, 0 }
-};
-
+static bool s_ipv6 = false;              // IPv6 support enabled
 static int s_minport = MIN_PORT;
 static int s_maxport = MAX_PORT;
 static int s_bufsize = BUF_SIZE;
@@ -101,7 +91,7 @@ static bool s_rtcp  = true;
 static bool s_drill = false;
 
 static Thread::Priority s_priority = Thread::Normal;
-static int s_tos     = 0;
+static int s_tos     = Socket::Normal;
 static int s_udpbuf  = 0;
 static int s_sleep   = 5;
 static int s_interval= 0;
@@ -124,7 +114,8 @@ class YRTPWrapper : public RefObject
     friend class YRTPSession;
     friend class YUDPTLSession;
 public:
-    YRTPWrapper(const char *localip, CallEndpoint* conn, const char* media, RTPSession::Direction direction, Message& msg, bool udptl = false);
+    YRTPWrapper(const char *localip, CallEndpoint* conn, const char* media,
+	RTPSession::Direction direction, Message& msg, bool udptl = false, bool ipv6 = false);
     ~YRTPWrapper();
     virtual void* getObject(const String& name) const;
     bool setParams(const char* raddr, Message& msg);
@@ -168,9 +159,9 @@ public:
     void terminate(Message& msg);
     static YRTPWrapper* find(const CallEndpoint* conn, const String& media);
     static YRTPWrapper* find(const String& id);
-    static void guessLocal(const char* remoteip, String& localip);
+    static void guessLocal(const char* remoteip, String& localip, bool ipv6);
 private:
-    void setupRTP(const char* localip, bool rtcp);
+    void setupRTP(const char* localip, bool rtcp, bool warnSeq);
     void setupUDPTL(const char* localip, u_int16_t maxLen = 250, u_int8_t maxSec = 2);
     bool bindLocal(const char* localip, bool rtcp);
     bool startRTP(const char* raddr, unsigned int rport, Message& msg);
@@ -197,6 +188,7 @@ private:
     unsigned int m_port;
     bool m_audio;
     bool m_valid;
+    bool m_ipv6;
 
     unsigned int m_noAudio;
     unsigned int m_lostAudio;
@@ -400,12 +392,14 @@ static ObjList s_mirrors;
 static Mutex s_mutex(false,"YRTPChan");
 static Mutex s_refMutex(false,"YRTPChan::reflect");
 static Mutex s_srcMutex(false,"YRTPChan::source");
+static bool s_rtpWarnSeq = true;         // Warn on invalid rtp sequence number
 
 
-YRTPWrapper::YRTPWrapper(const char* localip, CallEndpoint* conn, const char* media, RTPSession::Direction direction, Message& msg, bool udptl)
+YRTPWrapper::YRTPWrapper(const char* localip, CallEndpoint* conn, const char* media,
+    RTPSession::Direction direction, Message& msg, bool udptl, bool ipv6)
     : m_rtp(0), m_udptl(0), m_dir(direction), m_conn(conn),
       m_source(0), m_consumer(0), m_media(media),
-      m_bufsize(0), m_port(0), m_valid(true), m_noAudio(0), m_lostAudio(0)
+      m_bufsize(0), m_port(0), m_valid(true), m_ipv6(ipv6), m_noAudio(0), m_lostAudio(0)
 {
     Debug(&splugin,DebugAll,"YRTPWrapper::YRTPWrapper('%s',%p,'%s',%s,%p,%s) [%p]",
 	localip,conn,media,lookup(direction,dict_yrtp_dir),
@@ -433,7 +427,8 @@ YRTPWrapper::YRTPWrapper(const char* localip, CallEndpoint* conn, const char* me
 	setupUDPTL(localip,md,ms);
     }
     else
-	setupRTP(localip,msg.getBoolValue(YSTRING("rtcp"),s_rtcp));
+	setupRTP(localip,msg.getBoolValue(YSTRING("rtcp"),s_rtcp),
+	    msg.getBoolValue(YSTRING("rtp_warn_seq"),s_rtpWarnSeq));
     splugin.changed();
     s_mutex.unlock();
 }
@@ -513,11 +508,12 @@ YRTPWrapper* YRTPWrapper::find(const String& id)
     return 0;
 }
 
-void YRTPWrapper::setupRTP(const char* localip, bool rtcp)
+void YRTPWrapper::setupRTP(const char* localip, bool rtcp, bool warnSeq)
 {
-    Debug(&splugin,DebugAll,"YRTPWrapper::setupRTP(\"%s\",%s) [%p]",
-	localip,String::boolText(rtcp),this);
+    Debug(&splugin,DebugAll,"YRTPWrapper::setupRTP(\"%s\",%s,%s) [%p]",
+	localip,String::boolText(rtcp),String::boolText(warnSeq),this);
     m_rtp = new YRTPSession(this);
+    m_rtp->setWarnSeq(warnSeq);
     m_rtp->initTransport();
     bindLocal(localip,rtcp);
 }
@@ -560,7 +556,7 @@ bool YRTPWrapper::bindLocal(const char* localip, bool rtcp)
 	maxport++;
 	attempt = 1;
     }
-    SocketAddr addr(AF_INET);
+    SocketAddr addr(m_ipv6 ? SocketAddr::Unknown : SocketAddr::IPv4);
     if (!addr.host(localip)) {
 	Debug(&splugin,DebugWarn,"Wrapper '%s' could not parse address '%s' [%p]",
 	    m_id.c_str(),localip,this);
@@ -572,13 +568,13 @@ bool YRTPWrapper::bindLocal(const char* localip, bool rtcp)
 	if (m_rtp ? m_rtp->localAddr(addr,rtcp) : m_udptl->localAddr(addr)) {
 	    m_host = addr.host();
 	    m_port = lport;
-	    Debug(&splugin,DebugInfo,"Session '%s' %p bound to %s:%u%s [%p]",
-		m_id.c_str(),session(),localip,m_port,(rtcp ? " +RTCP" : ""),this);
+	    Debug(&splugin,DebugInfo,"Session '%s' %p bound to %s%s [%p]",
+		m_id.c_str(),session(),addr.addr().c_str(),(rtcp ? " +RTCP" : ""),this);
 	    return true;
 	}
     }
-    Debug(&splugin,DebugWarn,"YRTPWrapper '%s' bind failed in range %d-%d [%p]",
-	m_id.c_str(),minport,maxport,this);
+    Debug(&splugin,DebugWarn,"YRTPWrapper '%s' bind failed in range %d-%d on '%s' [%p]",
+	m_id.c_str(),minport,maxport,localip,this);
     return false;
 }
 
@@ -596,9 +592,10 @@ bool YRTPWrapper::setRemote(const char* raddr, unsigned int rport, const Message
 {
     if (!session())
 	return false;
-    SocketAddr addr(AF_INET);
+    SocketAddr addr(m_ipv6 ? SocketAddr::Unknown : SocketAddr::IPv4);
     if (!(addr.host(raddr) && addr.port(rport) && session()->remoteAddr(addr,msg.getBoolValue(YSTRING("autoaddr"),s_autoaddr)))) {
-	Debug(&splugin,DebugWarn,"RTP failed to set remote address %s:%d [%p]",raddr,rport,this);
+	Debug(&splugin,DebugWarn,"RTP failed to set remote address %s [%p]",
+	    SocketAddr::appendTo(raddr,rport).c_str(),this);
 	return false;
     }
     return true;
@@ -644,7 +641,7 @@ bool YRTPWrapper::startRTP(const char* raddr, unsigned int rport, Message& msg)
     int payload = p.toInteger(dict_payloads,-1);
     int evpayload = msg.getIntValue(YSTRING("evpayload"),101);
     const char* format = msg.getValue(YSTRING("format"));
-    int tos = msg.getIntValue(YSTRING("tos"),dict_tos,s_tos);
+    int tos = msg.getIntValue(YSTRING("tos"),Socket::tosValues(),s_tos);
     int buflen = msg.getIntValue(YSTRING("buffer"),s_udpbuf);
     int msec = msg.getIntValue(YSTRING("msleep"),s_sleep);
 
@@ -757,7 +754,7 @@ bool YRTPWrapper::startUDPTL(const char* raddr, unsigned int rport, Message& msg
 	return false;
     }
 
-    int tos = msg.getIntValue(YSTRING("tos"),dict_tos,s_tos);
+    int tos = msg.getIntValue(YSTRING("tos"),Socket::tosValues(),s_tos);
     int msec = msg.getIntValue(YSTRING("msleep"),s_sleep);
     if (!setRemote(raddr,rport,msg))
 	return false;
@@ -892,14 +889,14 @@ void YRTPWrapper::timeout(bool initial)
     }
 }
 
-void YRTPWrapper::guessLocal(const char* remoteip, String& localip)
+void YRTPWrapper::guessLocal(const char* remoteip, String& localip, bool ipv6)
 {
     if (s_localip) {
 	localip = s_localip;
 	return;
     }
     localip.clear();
-    SocketAddr r(AF_INET);
+    SocketAddr r(ipv6 ? SocketAddr::Unknown : SocketAddr::IPv4);
     if (!r.host(remoteip)) {
 	Debug(&splugin,DebugNote,"Guess - Could not parse remote '%s'",remoteip);
 	return;
@@ -1029,8 +1026,10 @@ void YRTPSession::rtpNewPayload(int payload, unsigned int timestamp)
 	silencePayload(payload);
     }
     else if (payload != m_newPayload) {
-	m_newPayload = payload;
-	Debug(&splugin,DebugMild,"Unexpected payload %d in wrapper %p",payload,m_wrap);
+	if (!receiver() || receiver()->dataPayload() != -1) {
+	    m_newPayload = payload;
+	    Debug(&splugin,DebugMild,"Unexpected payload %d in wrapper %p",payload,m_wrap);
+	}
     }
 }
 
@@ -1180,7 +1179,7 @@ unsigned long YRTPConsumer::Consume(const DataBlock &data, unsigned long tStamp,
 	XDebug(&splugin,DebugAll,"YRTPConsumer writing %d UDPTL bytes, ts=%lu [%p]",
 	    data.length(),tStamp,this);
 	// for T.38 the timestamp is used as sequence number
-	m_wrap->udptl()->udptlSend(ptr,len,tStamp);
+	m_wrap->udptl()->udptlSend(ptr,len,(uint16_t)tStamp);
 	return invalidStamp();
     }
     if (!(m_wrap->bufSize() && m_wrap->rtp()))
@@ -1269,7 +1268,7 @@ void YRTPMonitor::startup()
 
 void YRTPMonitor::saveStats(Message& msg) const
 {
-    unsigned int d = m_start ? ((m_last - m_start + 500000) / 1000000) : 0;
+    uint64_t d = m_start ? ((m_last - m_start + 500000) / 1000000) : 0;
     msg.addParam("rtp_rx_packets",String(m_rtpPackets));
     msg.addParam("rtcp_rx_packets",String(m_rtcpPackets));
     msg.addParam("rtp_rx_bytes",String(m_rtpBytes));
@@ -1361,9 +1360,10 @@ bool AttachHandler::received(Message &msg)
 	w = YRTPWrapper::find(msg[YSTRING("rtpid")]);
     if (!w) {
 	String lip(msg.getValue(YSTRING("localip")));
+	bool ipv6 = msg.getBoolValue(YSTRING("ipv6_support"),s_ipv6);
 	if (lip.null())
-	    YRTPWrapper::guessLocal(rip,lip);
-	w = new YRTPWrapper(lip,ch,media,RTPSession::SendRecv,msg);
+	    YRTPWrapper::guessLocal(rip,lip,ipv6);
+	w = new YRTPWrapper(lip,ch,media,RTPSession::SendRecv,msg,false,ipv6);
 	w->setMaster(msg.getValue(YSTRING("id")));
 
 	if (!src.null()) {
@@ -1463,15 +1463,16 @@ bool RtpHandler::received(Message &msg)
 	if (!(d_recv || d_send))
 	    return false;
 	String lip(msg.getValue(YSTRING("localip")));
+	bool ipv6 = msg.getBoolValue(YSTRING("ipv6_support"),s_ipv6);
 	if (lip.null())
-	    YRTPWrapper::guessLocal(rip,lip);
+	    YRTPWrapper::guessLocal(rip,lip,ipv6);
 	if (lip.null()) {
 	    Debug(&splugin,DebugWarn,"RTP request with no local address!");
 	    return false;
 	}
 
 	status = "created";
-	w = new YRTPWrapper(lip,ch,media,direction,msg,udptl);
+	w = new YRTPWrapper(lip,ch,media,direction,msg,udptl,ipv6);
 	w->setMaster(msg.getValue(YSTRING("id")));
 
 	w->deref();
@@ -1611,7 +1612,7 @@ bool YRTPPlugin::reflectSetup(Message& msg, const char* id, RTPTransport& rtp,
 {
     String lip(msg.getValue(YSTRING("rtp_localip")));
     if (lip.null())
-	YRTPWrapper::guessLocal(rHost,lip);
+	YRTPWrapper::guessLocal(rHost,lip,false);
     SocketAddr addr(AF_INET);
     if (!addr.host(lip)) {
 	Debug(this,DebugWarn,"Bad local RTP address '%s' for %s '%s'",
@@ -1846,12 +1847,14 @@ void YRTPPlugin::initialize()
 {
     Output("Initializing module YRTP");
     Configuration cfg(Engine::configFile("yrtpchan"));
+    s_ipv6 = SocketAddr::supports(SocketAddr::IPv6) &&
+	cfg.getBoolValue("general","ipv6_support",false);
     s_minport = cfg.getIntValue("general","minport",MIN_PORT);
     s_maxport = cfg.getIntValue("general","maxport",MAX_PORT);
     s_bufsize = cfg.getIntValue("general","buffer",BUF_SIZE);
     s_minJitter = cfg.getIntValue("general","minjitter",50);
     s_maxJitter = cfg.getIntValue("general","maxjitter",Engine::clientMode() ? 120 : 0);
-    s_tos = cfg.getIntValue("general","tos",dict_tos);
+    s_tos = cfg.getIntValue("general","tos",Socket::tosValues());
     s_udpbuf = cfg.getIntValue("general","udpbuf",0);
     s_localip = cfg.getValue("general","localip");
     s_autoaddr = cfg.getBoolValue("general","autoaddr",true);
@@ -1864,6 +1867,7 @@ void YRTPPlugin::initialize()
     s_sleep = cfg.getIntValue("general","defsleep",5);
     RTPGroup::setMinSleep(cfg.getIntValue("general","minsleep"));
     s_priority = Thread::priority(cfg.getValue("general","thread"));
+    s_rtpWarnSeq = cfg.getBoolValue("general","rtp_warn_seq",true);
     s_timeout = cfg.getIntValue("timeouts","timeout",3000);
     s_udptlTimeout = cfg.getIntValue("timeouts","udptl_timeout",25000);
     s_notifyMsg = cfg.getValue("timeouts","notifymsg");

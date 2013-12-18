@@ -3,21 +3,18 @@
  * This file is part of the YATE Project http://YATE.null.ro
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include "yatengine.h"
@@ -410,6 +407,7 @@ bool EngineStatusHandler::received(Message &msg)
 	return false;
     msg.retValue() << "name=engine,type=system";
     msg.retValue() << ",version=" << YATE_VERSION;
+    msg.retValue() << ",revision=" << YATE_REVISION;
     msg.retValue() << ",nodename=" << Engine::nodeName();
     msg.retValue() << ";plugins=" << plugins.count();
     msg.retValue() << ",inuse=" << Engine::self()->usedPlugins();
@@ -424,9 +422,13 @@ bool EngineStatusHandler::received(Message &msg)
     msg.retValue() << ",threads=" << Thread::count();
     msg.retValue() << ",workers=" << EnginePrivate::count;
     msg.retValue() << ",mutexes=" << Mutex::count();
-    msg.retValue() << ",locks=" << Mutex::locks();
+    int locks = Mutex::locks();
+    if (locks >= 0)
+	msg.retValue() << ",locks=" << locks;
     msg.retValue() << ",semaphores=" << Semaphore::count();
-    msg.retValue() << ",waiting=" << Semaphore::locks();
+    locks = Semaphore::locks();
+    if (locks >= 0)
+	msg.retValue() << ",waiting=" << locks;
     msg.retValue() << ",acceptcalls=" << lookup(Engine::accept(),Engine::getCallAcceptStates());
     if (msg.getBoolValue("details",true)) {
 	NamedIterator iter(Engine::runParams());
@@ -465,7 +467,10 @@ bool EngineEventHandler::received(Message &msg)
     else {
 	// build a full text with timestamp and sender
 	char tstamp[30];
-	Debugger::formatTime(tstamp);
+	Debugger::Formatting fmt = Debugger::getFormatting();
+	if (Debugger::None == fmt)
+	    fmt = Debugger::Relative;
+	Debugger::formatTime(tstamp,fmt);
 	ev = new CapturedEvent(level,tstamp);
 	*ev << "<" << *type << "> " << *text;
 	msg.setParam("fulltext",*ev);
@@ -640,6 +645,32 @@ bool EngineCommand::received(Message &msg)
     if (line.null()) {
 	doCompletion(msg,msg.getValue("partline"),msg.getValue("partword"));
 	return false;
+    }
+    if (line.startSkip("control")) {
+	int pos = line.find(' ');
+	String id = line.substr(0,pos).trimBlanks();
+	String ctrl = line.substr(pos+1).trimBlanks();
+	if ((pos <= 0) || id.null() || ctrl.null())
+	    return false;
+	Message m("chan.control");
+	m.addParam("targetid",id);
+	m.addParam("component",id);
+	m.copyParam(msg,"module");
+	m.copyParam(msg,"cmd",'_');
+	static const Regexp r("^\\(.* \\)\\?\\([^= ]\\+\\)=\\([^=]*\\)$");
+	while (ctrl) {
+	    if (!ctrl.matches(r)) {
+		m.setParam("operation",ctrl);
+		break;
+	    }
+	    m.setParam(ctrl.matchString(2),ctrl.matchString(3).trimBlanks());
+	    ctrl = ctrl.matchString(1).trimBlanks();
+	}
+	if (!Engine::dispatch(m))
+	    return false;
+	msg.retValue() = m.retValue();
+	NamedString* opStatus = m.getParam(YSTRING("operation-status"));
+	return !opStatus || opStatus->toBoolean();
     }
     if (!line.startSkip("module")) {
 	if (line.startSkip("events") || (line == "logview" && (line.clear(),true))) {
@@ -1328,6 +1359,7 @@ int Engine::engineInit()
 
     s_params.addParam("version",YATE_VERSION);
     s_params.addParam("release",YATE_STATUS YATE_RELEASE);
+    s_params.addParam("revision",YATE_REVISION);
     s_params.addParam("nodename",s_node);
     s_params.addParam("runid",String(s_runid));
     s_params.addParam("configname",s_cfgfile);
@@ -1468,8 +1500,11 @@ int Engine::run()
 
 	// Create worker thread if we didn't hear about any of them in a while
 	if (s_makeworker && (EnginePrivate::count < s_maxworkers)) {
-	    Debug(EnginePrivate::count ? DebugMild : DebugInfo,
-		"Creating new message dispatching thread (%d running)",EnginePrivate::count);
+	    if (EnginePrivate::count)
+		Alarm("engine","performance",(EnginePrivate::count < 4) ? DebugMild : DebugWarn,
+		    "Creating new message dispatching thread (%d running)",EnginePrivate::count);
+	    else
+		Debug(DebugInfo,"Creating first message dispatching thread");
 	    EnginePrivate *prv = new EnginePrivate;
 	    prv->startup();
 	}
@@ -1493,7 +1528,7 @@ int Engine::run()
 	XDebug(DebugAll,"Sleeping for %ld",t);
 	Thread::usleep(t);
 	Message* m = new Message("engine.timer",0,true);
-	m->addParam("time",String((int)m->msgTime().sec()));
+	m->addParam("time",String(m->msgTime().sec()));
 	if (nodeName())
 	    m->addParam("nodename",nodeName());
 	if (s_haltcode == -1) {
@@ -1541,6 +1576,8 @@ int Engine::engineCleanup()
 #endif
     delete this;
     int mux = Mutex::locks();
+    if (mux < 0)
+	mux = 0;
     unsigned int cnt = plugins.count();
     plugins.clear();
     if (mux || cnt)
@@ -1646,6 +1683,24 @@ void Engine::pluginMode(PluginMode mode)
     s_loadMode = mode;
 }
 
+void Engine::tryPluginFile(const String& name, const String& path, bool defload)
+{
+    XDebug(DebugInfo,"Found dir entry: %s",name.c_str());
+    if (s_modsuffix && !name.endsWith(s_modsuffix))
+	return;
+    const String* s = s_cfg.getKey(YSTRING("modules"),name);
+    if (s) {
+	if (!s->toBoolean(defload || s->null()))
+	    return;
+    }
+    else if (!defload)
+	return;
+
+    loadPlugin(path + PATH_SEP + name,
+	s_cfg.getBoolValue(YSTRING("localsym"),name,s_localsymbol),
+	s_cfg.getBoolValue(YSTRING("nounload"),name));
+}
+
 bool Engine::loadPluginDir(const String& relPath)
 {
 #ifdef DEBUG
@@ -1679,13 +1734,7 @@ bool Engine::loadPluginDir(const String& relPath)
 	return false;
     }
     do {
-	XDebug(DebugInfo,"Found dir entry %s",entry.cFileName);
-	int n = ::strlen(entry.cFileName) - s_modsuffix.length();
-	if ((n > 0) && !::strcmp(entry.cFileName+n,s_modsuffix)) {
-	    if (s_cfg.getBoolValue("modules",entry.cFileName,defload))
-		loadPlugin(path + PATH_SEP + entry.cFileName,false,
-		    s_cfg.getBoolValue("nounload",entry.cFileName));
-	}
+	tryPluginFile(entry.cFileName,path,defload);
     } while (::FindNextFile(hf,&entry) && !exiting());
     ::FindClose(hf);
 #else
@@ -1695,16 +1744,8 @@ bool Engine::loadPluginDir(const String& relPath)
 	return false;
     }
     struct dirent *entry;
-    while (((entry = ::readdir(dir)) != 0) && !exiting()) {
-	XDebug(DebugInfo,"Found dir entry %s",entry->d_name);
-	int n = ::strlen(entry->d_name) - s_modsuffix.length();
-	if ((n > 0) && !::strcmp(entry->d_name+n,s_modsuffix)) {
-	    if (s_cfg.getBoolValue("modules",entry->d_name,defload))
-		loadPlugin(path + PATH_SEP + entry->d_name,
-		    s_cfg.getBoolValue("localsym",entry->d_name,s_localsymbol),
-		    s_cfg.getBoolValue("nounload",entry->d_name));
-	}
-    }
+    while (((entry = ::readdir(dir)) != 0) && !exiting())
+	tryPluginFile(entry->d_name,path,defload);
     ::closedir(dir);
 #endif
     return true;
@@ -1717,7 +1758,7 @@ void Engine::loadPlugins()
         unsigned int len = l->length();
         for (unsigned int i=0; i<len; i++) {
             NamedString *n = l->getParam(i);
-            if (n && n->toBoolean()) {
+            if (n && n->toBoolean(n->null())) {
         	String path(n->name());
         	s_params.replaceParams(path);
                 loadPlugin(path);
@@ -1738,7 +1779,7 @@ void Engine::loadPlugins()
 	    if (exiting())
 		return;
             NamedString *n = l->getParam(i);
-            if (n && n->toBoolean()) {
+            if (n && n->toBoolean(n->null())) {
         	String path(n->name());
         	s_params.replaceParams(path);
                 loadPlugin(path);
@@ -1940,8 +1981,8 @@ static void usage(bool client, FILE* f)
 "Usage: yate [options] [commands ...]\n"
 "   -h, --help     Display help message (this one) and exit\n"
 "   -V, --version  Display program version and exit\n"
-"   -v             Verbose debugging (you can use more than once)\n"
-"   -q             Quieter debugging (you can use more than once)\n"
+"   -v             Verbose logging (you can use more than once)\n"
+"   -q             Quieter logging (you can use more than once)\n"
 "%s"
 "   -p filename    Write PID to file\n"
 "   -l filename    Log to file\n"
@@ -1963,7 +2004,7 @@ static void usage(bool client, FILE* f)
 "   -D[options]    Special debugging options\n"
 "     a            Abort if bugs are encountered\n"
 "     m            Attempt to debug mutex deadlocks\n"
-"     d            Disable locking debugging and safety features\n"
+"     d            Enable locking debugging and safety features\n"
 #ifdef RTLD_GLOBAL
 "     l            Try to keep module symbols local\n"
 #endif
@@ -2011,7 +2052,7 @@ static void noarg(bool client, const char* opt)
 
 static void version()
 {
-    ::fprintf(stdout,"Yate " YATE_VERSION " " YATE_STATUS YATE_RELEASE "\n");
+    ::fprintf(stdout,"Yate " YATE_VERSION " " YATE_STATUS YATE_RELEASE " r" YATE_REVISION "\n");
 }
 
 int Engine::main(int argc, const char** argv, const char** env, RunMode mode, EngineLoop loop, bool fail)
@@ -2195,7 +2236,7 @@ int Engine::main(int argc, const char** argv, const char** env, RunMode mode, En
 				    }
 				    break;
 				case 'd':
-				    Lockable::disableSafety();
+				    Lockable::enableSafety();
 				    break;
 #ifdef RTLD_GLOBAL
 				case 'l':

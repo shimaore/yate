@@ -5,21 +5,18 @@
  * Javascript channel support based on libyscript
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2011 Null Team
+ * Copyright (C) 2011-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include <yatepbx.h>
@@ -136,7 +133,6 @@ public:
 private:
     JsParser m_jsCode;
     RefPointer<ScriptContext> m_context;
-    unsigned int m_fileTime;
     bool m_inUse;
     static ObjList s_globals;
 };
@@ -202,7 +198,7 @@ private:
     JsEngine* m_engine;
 };
 
-#define MKDEBUG(lvl) params().addParam(new ExpOperation((long int)Debug ## lvl,"Debug" # lvl))
+#define MKDEBUG(lvl) params().addParam(new ExpOperation((int64_t)Debug ## lvl,"Debug" # lvl))
 class JsEngine : public JsObject, public DebugEnabler
 {
     YCLASS(JsEngine,JsObject)
@@ -211,6 +207,7 @@ public:
 	: JsObject("Engine",mtx,true),
 	  m_worker(0), m_debugName("javascript")
 	{
+	    debugName(m_debugName);
 	    debugChain(&__plugin);
 	    MKDEBUG(Fail);
 	    MKDEBUG(Test);
@@ -225,6 +222,7 @@ public:
 	    MKDEBUG(All);
 	    params().addParam(new ExpFunction("output"));
 	    params().addParam(new ExpFunction("debug"));
+	    params().addParam(new ExpFunction("alarm"));
 	    params().addParam(new ExpFunction("sleep"));
 	    params().addParam(new ExpFunction("usleep"));
 	    params().addParam(new ExpFunction("yield"));
@@ -232,7 +230,12 @@ public:
 	    params().addParam(new ExpFunction("dump_r"));
 	    params().addParam(new ExpFunction("print_r"));
 	    params().addParam(new ExpFunction("debugName"));
+	    params().addParam(new ExpFunction("debugLevel"));
+	    params().addParam(new ExpFunction("debugEnabled"));
+	    params().addParam(new ExpFunction("debugAt"));
+	    params().addParam(new ExpFunction("setDebug"));
 	    params().addParam(new ExpWrapper(new JsShared(mtx),"shared"));
+	    params().addParam(new ExpFunction("runParams"));
 	    params().addParam(new ExpFunction("setInterval"));
 	    params().addParam(new ExpFunction("clearInterval"));
 	    params().addParam(new ExpFunction("setTimeout"));
@@ -271,6 +274,7 @@ public:
 	    params().addParam(new ExpFunction("name"));
 	    params().addParam(new ExpFunction("broadcast"));
 	    params().addParam(new ExpFunction("retValue"));
+	    params().addParam(new ExpFunction("msgTime"));
 	    params().addParam(new ExpFunction("getColumn"));
 	    params().addParam(new ExpFunction("getRow"));
 	    params().addParam(new ExpFunction("getResult"));
@@ -502,14 +506,14 @@ public:
 	AsyncYield,
 	AsyncIdle
     };
-    inline JsEngAsync(ScriptRun* runner, Oper op, long int val = 0)
+    inline JsEngAsync(ScriptRun* runner, Oper op, int64_t val = 0)
 	: ScriptAsync(runner),
 	  m_oper(op), m_val(val)
-	{ XDebug(DebugAll,"JsEngAsync %d %ld",op,val); }
+	{ XDebug(DebugAll,"JsEngAsync %d " FMT64,op,val); }
     virtual bool run();
 private:
     Oper m_oper;
-    long int m_val;
+    int64_t m_val;
 };
 
 class JsMsgAsync : public ScriptAsync
@@ -549,10 +553,10 @@ bool JsEngAsync::run()
 {
     switch (m_oper) {
 	case AsyncSleep:
-	    Thread::sleep(m_val);
+	    Thread::sleep((unsigned int)m_val);
 	    break;
 	case AsyncUsleep:
-	    Thread::usleep(m_val);
+	    Thread::usleep((unsigned long)m_val);
 	    break;
 	case AsyncYield:
 	    Thread::yield();
@@ -569,7 +573,7 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 {
     if (oper.name() == YSTRING("output")) {
 	String str;
-	for (long int i = oper.number(); i; i--) {
+	for (int i = (int)oper.number(); i; i--) {
 	    ExpOperation* op = popValue(stack,context);
 	    if (str)
 		str = *op + " " + str;
@@ -583,12 +587,12 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
     else if (oper.name() == YSTRING("debug")) {
 	int level = DebugNote;
 	String str;
-	for (long int i = oper.number(); i; i--) {
+	for (int i = (int)oper.number(); i; i--) {
 	    ExpOperation* op = popValue(stack,context);
 	    if (!op)
 		continue;
 	    if ((i == 1) && oper.number() > 1 && op->isInteger())
-		level = op->number();
+		level = (int)op->number();
 	    else if (*op) {
 		if (str)
 		    str = *op + " " + str;
@@ -598,12 +602,51 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	    TelEngine::destruct(op);
 	}
 	if (str) {
-	    int limit = s_allowAbort ? DebugFail : DebugGoOn;
+	    int limit = s_allowAbort ? DebugFail : DebugTest;
 	    if (level > DebugAll)
 		level = DebugAll;
 	    else if (level < limit)
 		level = limit;
 	    Debug(this,level,"%s",str.c_str());
+	}
+    }
+    else if (oper.name() == YSTRING("alarm")) {
+	if (oper.number() < 2)
+	    return false;
+	int level = -1;
+	String info;
+	String str;
+	for (int i = (int)oper.number(); i; i--) {
+	    ExpOperation* op = popValue(stack,context);
+	    if (!op)
+		continue;
+	    if (i == 1) {
+		if (level < 0) {
+		    if (op->isInteger())
+			level = (int)op->number();
+		    else
+			return false;
+		}
+		else
+		    info = *op;
+	    }
+	    else if ((i == 2) && oper.number() > 2 && op->isInteger())
+		level = (int)op->number();
+	    else if (*op) {
+		if (str)
+		    str = *op + " " + str;
+		else
+		    str = *op;
+	    }
+	    TelEngine::destruct(op);
+	}
+	if (str && level >= 0) {
+	    int limit = s_allowAbort ? DebugFail : DebugTest;
+	    if (level > DebugAll)
+		level = DebugAll;
+	    else if (level < limit)
+		level = limit;
+	    Alarm(this,info,level,"%s",str.c_str());
 	}
     }
     else if (oper.name() == YSTRING("sleep")) {
@@ -612,7 +655,7 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	ExpOperation* op = popValue(stack,context);
 	if (!op)
 	    return false;
-	long int val = op->valInteger();
+	int64_t val = op->valInteger();
 	TelEngine::destruct(op);
 	if (val < 0)
 	    val = 0;
@@ -628,7 +671,7 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	ExpOperation* op = popValue(stack,context);
 	if (!op)
 	    return false;
-	long int val = op->valInteger();
+	int64_t val = op->valInteger();
 	TelEngine::destruct(op);
 	if (val < 0)
 	    val = 0;
@@ -712,6 +755,77 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	else
 	    return false;
     }
+    else if (oper.name() == YSTRING("debugLevel")) {
+	if (oper.number() == 0)
+	    ExpEvaluator::pushOne(stack,new ExpOperation((int64_t)debugLevel()));
+	else if (oper.number() == 1) {
+	    ExpOperation* op = popValue(stack,context);
+	    if (op && op->isInteger())
+		debugLevel((int)op->valInteger());
+	    TelEngine::destruct(op);
+	}
+	else
+	    return false;
+    }
+    else if (oper.name() == YSTRING("debugEnabled")) {
+	if (oper.number() == 0)
+	    ExpEvaluator::pushOne(stack,new ExpOperation(debugEnabled()));
+	else if (oper.number() == 1) {
+	    ExpOperation* op = popValue(stack,context);
+	    if (op)
+		debugEnabled(op->valBoolean());
+	    TelEngine::destruct(op);
+	}
+	else
+	    return false;
+    }
+    else if (oper.name() == YSTRING("debugAt")) {
+	if (oper.number() == 1) {
+	    ExpOperation* op = popValue(stack,context);
+	    if (!(op && op->isInteger()))
+		return false;
+	    ExpEvaluator::pushOne(stack,new ExpOperation(debugAt((int)op->valInteger())));
+	    TelEngine::destruct(op);
+	}
+	else
+	    return false;
+    }
+    else if (oper.name() == YSTRING("setDebug")) {
+	if (oper.number() == 1) {
+	    ExpOperation* op = popValue(stack,context);
+	    if (!op)
+		return false;
+	    if (op->startSkip("level")) {
+		int dbg = debugLevel();
+		*op >> dbg;
+		debugLevel(dbg);
+	    }
+	    else if (*op == "reset")
+		debugChain(&__plugin);
+	    else if (*op == "engine")
+		debugCopy();
+	    else if (op->isBoolean())
+		debugEnabled(op->toBoolean(debugEnabled()));
+	    TelEngine::destruct(op);
+	}
+	else
+	    return false;
+    }
+    else if (oper.name() == YSTRING("runParams")) {
+	if (oper.number() == 0) {
+	    JsObject* jso = new JsObject("Object",mutex());
+	    jso->params().copyParams(Engine::runParams());
+	    ExpEvaluator::pushOne(stack,new ExpWrapper(jso,oper.name()));
+	}
+	else if (oper.number() == 1) {
+	    ExpOperation* op = popValue(stack,context);
+	    if (op)
+		ExpEvaluator::pushOne(stack,new ExpOperation(Engine::runParams()[*op]));
+	    TelEngine::destruct(op);
+	}
+	else
+	    return false;
+    }
     else if (oper.name() == YSTRING("setInterval") || oper.name() == YSTRING("setTimeout")) {
 	ObjList args;
 	if (extractArgs(stack,oper,context,args) < 2)
@@ -738,7 +852,7 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	}
 	unsigned int id = m_worker->addEvent(*callback,interval->toInteger(),
 		oper.name() == YSTRING("setInterval"));
-	ExpEvaluator::pushOne(stack,new ExpOperation((long int)id));
+	ExpEvaluator::pushOne(stack,new ExpOperation((int64_t)id));
     }
     else if (oper.name() == YSTRING("clearInterval") || oper.name() == YSTRING("clearTimeout")) {
 	if (!m_worker)
@@ -747,7 +861,7 @@ bool JsEngine::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	if (!extractArgs(stack,oper,context,args))
 	    return false;
 	ExpOperation* id = static_cast<ExpOperation*>(args[0]);
-	bool ret = m_worker->removeEvent(id->valInteger(),oper.name() == YSTRING("clearInterval"));
+	bool ret = m_worker->removeEvent((unsigned int)id->valInteger(),oper.name() == YSTRING("clearInterval"));
 	ExpEvaluator::pushOne(stack,new ExpOperation(ret));
     }
     else
@@ -779,7 +893,7 @@ void JsEngine::initialize(ScriptContext* context)
 
 bool JsShared::runNative(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {
-    XDebug(&__plugin,DebugAll,"JsShared::runNative '%s'(%ld)",oper.name().c_str(),oper.number());
+    XDebug(&__plugin,DebugAll,"JsShared::runNative '%s'("FMT64")",oper.name().c_str(),oper.number());
     if (oper.name() == YSTRING("inc")) {
 	ObjList args;
 	switch (extractArgs(stack,oper,context,args)) {
@@ -793,12 +907,12 @@ bool JsShared::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	ExpOperation* modulo = static_cast<ExpOperation*>(args[1]);
 	int mod = 0;
 	if (modulo && modulo->isInteger())
-	    mod = modulo->number();
+	    mod = (int)modulo->number();
 	if (mod > 1)
 	    mod--;
 	else
 	    mod = 0;
-	ExpEvaluator::pushOne(stack,new ExpOperation((long)Engine::sharedVars().inc(*param,mod)));
+	ExpEvaluator::pushOne(stack,new ExpOperation((int64_t)Engine::sharedVars().inc(*param,mod)));
     }
     else if (oper.name() == YSTRING("dec")) {
 	ObjList args;
@@ -813,12 +927,12 @@ bool JsShared::runNative(ObjList& stack, const ExpOperation& oper, GenObject* co
 	ExpOperation* modulo = static_cast<ExpOperation*>(args[1]);
 	int mod = 0;
 	if (modulo && modulo->isInteger())
-	    mod = modulo->number();
+	    mod = (int)modulo->number();
 	if (mod > 1)
 	    mod--;
 	else
 	    mod = 0;
-	ExpEvaluator::pushOne(stack,new ExpOperation((long)Engine::sharedVars().dec(*param,mod)));
+	ExpEvaluator::pushOne(stack,new ExpOperation((int64_t)Engine::sharedVars().dec(*param,mod)));
     }
     else if (oper.name() == YSTRING("get")) {
 	if (oper.number() != 1)
@@ -886,7 +1000,7 @@ bool JsMessage::runAssign(ObjList& stack, const ExpOperation& oper, GenObject* c
 
 bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {
-    XDebug(&__plugin,DebugAll,"JsMessage::runNative '%s'(%ld)",oper.name().c_str(),oper.number());
+    XDebug(&__plugin,DebugAll,"JsMessage::runNative '%s'("FMT64")",oper.name().c_str(),oper.number());
     if (oper.name() == YSTRING("broadcast")) {
 	if (oper.number() != 0)
 	    return false;
@@ -921,6 +1035,14 @@ bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* c
 	    default:
 		return false;
 	}
+    }
+    else if (oper.name() == YSTRING("msgTime")) {
+	if (oper.number() != 0)
+	    return false;
+	if (m_message)
+	    ExpEvaluator::pushOne(stack,new ExpOperation((int64_t)m_message->msgTime().msec()));
+	else
+	    ExpEvaluator::pushOne(stack,JsParser::nullClone());
     }
     else if (oper.name() == YSTRING("getColumn")) {
 	ObjList args;
@@ -1009,7 +1131,7 @@ bool JsMessage::runNative(ObjList& stack, const ExpOperation& oper, GenObject* c
 	unsigned int priority = 100;
 	if (prio) {
 	    if (prio->isInteger() && (prio->number() >= 0))
-		priority = prio->number();
+		priority = (unsigned int)prio->number();
 	    else
 		return false;
 	}
@@ -1179,7 +1301,7 @@ void JsMessage::getColumn(ObjList& stack, const ExpOperation* col, GenObject* co
 	    // [ val1, val2, val3 ]
 	    int idx = -1;
 	    if (col->isInteger())
-		idx = col->number();
+		idx = (int)col->number();
 	    else {
 		for (int i = 0; i < cols; i++) {
 		    GenObject* o = arr->get(i,0);
@@ -1235,7 +1357,7 @@ void JsMessage::getRow(ObjList& stack, const ExpOperation* row, GenObject* conte
 	if (row) {
 	    // { col1: val1, col2: val2 }
 	    if (row->isInteger()) {
-		int idx = row->number() + 1;
+		int idx = (int)row->number() + 1;
 		if (idx > 0 && idx <= rows) {
 		    JsObject* jso = new JsObject("Object",mutex());
 		    for (int c = 0; c < cols; c++) {
@@ -1283,11 +1405,11 @@ void JsMessage::getResult(ObjList& stack, const ExpOperation& row, const ExpOper
     if (arr && arr->getRows() && row.isInteger()) {
 	int rows = arr->getRows() - 1;
 	int cols = arr->getColumns();
-	int r = row.number();
+	int r = (int)row.number();
 	if (r >= 0 && r < rows) {
 	    int c = -1;
 	    if (col.isInteger())
-		c = col.number();
+		c = (int)col.number();
 	    else {
 		for (int i = 0; i < cols; i++) {
 		    GenObject* o = arr->get(i,0);
@@ -1311,7 +1433,7 @@ void JsMessage::getResult(ObjList& stack, const ExpOperation& row, const ExpOper
 
 JsObject* JsMessage::runConstructor(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {
-    XDebug(&__plugin,DebugAll,"JsMessage::runConstructor '%s'(%ld)",oper.name().c_str(),oper.number());
+    XDebug(&__plugin,DebugAll,"JsMessage::runConstructor '%s'("FMT64")",oper.name().c_str(),oper.number());
     ObjList args;
     switch (extractArgs(stack,oper,context,args)) {
 	case 1:
@@ -1442,7 +1564,7 @@ bool JsMessageQueue::matchesFilters(const NamedList& filters)
 
 bool JsFile::runNative(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {
-    XDebug(&__plugin,DebugAll,"JsFile::runNative '%s'(%ld)",oper.name().c_str(),oper.number());
+    XDebug(&__plugin,DebugAll,"JsFile::runNative '%s'("FMT64")",oper.name().c_str(),oper.number());
     if (oper.name() == YSTRING("exists")) {
 	if (oper.number() != 1)
 	    return false;
@@ -1501,7 +1623,7 @@ bool JsFile::runNative(ObjList& stack, const ExpOperation& oper, GenObject* cont
 	if (!op)
 	    return false;
 	unsigned int epoch = 0;
-	long int fTime = File::getFileTime(*op,epoch) ? (signed long int)epoch : -1;
+	int64_t fTime = File::getFileTime(*op,epoch) ? (int64_t)epoch : -1;
 	ExpEvaluator::pushOne(stack,new ExpOperation(fTime));
 	TelEngine::destruct(op);
     }
@@ -1517,7 +1639,7 @@ bool JsFile::runNative(ObjList& stack, const ExpOperation& oper, GenObject* cont
 	    return false;
 	}
 	bool ok = fTime->isInteger() && (fTime->number() >= 0) &&
-	    File::setFileTime(*fName,fTime->number());
+	    File::setFileTime(*fName,(unsigned int)fTime->number());
 	TelEngine::destruct(fTime);
 	TelEngine::destruct(fName);
 	ExpEvaluator::pushOne(stack,new ExpOperation(ok));
@@ -1541,7 +1663,7 @@ void JsFile::initialize(ScriptContext* context)
 
 bool JsXML::runNative(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {
-    XDebug(&__plugin,DebugAll,"JsXML::runNative '%s'(%ld)",oper.name().c_str(),oper.number());
+    XDebug(&__plugin,DebugAll,"JsXML::runNative '%s'("FMT64")",oper.name().c_str(),oper.number());
     ObjList args;
     int argc = extractArgs(stack,oper,context,args);
     if (oper.name() == YSTRING("put")) {
@@ -1755,7 +1877,7 @@ bool JsXML::runNative(ObjList& stack, const ExpOperation& oper, GenObject* conte
 
 JsObject* JsXML::runConstructor(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {
-    XDebug(&__plugin,DebugAll,"JsXML::runConstructor '%s'(%ld) [%p]",oper.name().c_str(),oper.number(),this);
+    XDebug(&__plugin,DebugAll,"JsXML::runConstructor '%s'("FMT64") [%p]",oper.name().c_str(),oper.number(),this);
     JsXML* obj = 0;
     ObjList args;
     switch (extractArgs(stack,oper,context,args)) {
@@ -1963,7 +2085,7 @@ ScriptContext* JsEngineWorker::getContext()
 
 bool JsChannel::runNative(ObjList& stack, const ExpOperation& oper, GenObject* context)
 {
-    XDebug(&__plugin,DebugAll,"JsChannel::runNative '%s'(%ld)",oper.name().c_str(),oper.number());
+    XDebug(&__plugin,DebugAll,"JsChannel::runNative '%s'("FMT64")",oper.name().c_str(),oper.number());
     if (oper.name() == YSTRING("id")) {
 	if (oper.number())
 	    return false;
@@ -2410,7 +2532,7 @@ ObjList JsGlobal::s_globals;
 
 JsGlobal::JsGlobal(const char* scriptName, const char* fileName, bool relPath)
     : NamedString(scriptName,fileName),
-      m_fileTime(0), m_inUse(true)
+      m_inUse(true)
 {
     m_jsCode.basePath(s_basePath);
     if (relPath)
@@ -2418,7 +2540,6 @@ JsGlobal::JsGlobal(const char* scriptName, const char* fileName, bool relPath)
     m_jsCode.link(s_allowLink);
     m_jsCode.trace(s_allowTrace);
     DDebug(&__plugin,DebugAll,"Loading global Javascript '%s' from '%s'",name().c_str(),c_str());
-    File::getFileTime(c_str(),m_fileTime);
     if (m_jsCode.parseFile(*this))
 	Debug(&__plugin,DebugInfo,"Parsed '%s' script: %s",name().c_str(),c_str());
     else if (*this)
@@ -2442,15 +2563,7 @@ JsGlobal::~JsGlobal()
 
 bool JsGlobal::fileChanged(const char* fileName) const
 {
-    if (m_jsCode.basePath() != s_basePath)
-	return true;
-    String tmp(fileName);
-    m_jsCode.adjustPath(tmp);
-    if (tmp != *this)
-	return true;
-    unsigned int time;
-    File::getFileTime(tmp,time);
-    return (time != m_fileTime);
+    return m_jsCode.scriptChanged(fileName,s_basePath);
 }
 
 void JsGlobal::markUnused()
@@ -2803,19 +2916,28 @@ void JsModule::initialize()
 	tmp += Engine::pathSeparator();
     s_basePath = tmp;
     s_allowAbort = cfg.getBoolValue("general","allow_abort");
-    s_allowTrace = cfg.getBoolValue("general","allow_trace");
-    s_allowLink = cfg.getBoolValue("general","allow_link",true);
-    lock();
-    m_assistCode.clear();
-    m_assistCode.basePath(tmp);
-    m_assistCode.link(s_allowLink);
-    m_assistCode.trace(s_allowTrace);
+    bool changed = false;
+    if (cfg.getBoolValue("general","allow_trace") != s_allowTrace) {
+	s_allowTrace = !s_allowTrace;
+	changed = true;
+    }
+    if (cfg.getBoolValue("general","allow_link",true) != s_allowLink) {
+	s_allowLink = !s_allowLink;
+	changed = true;
+    }
     tmp = cfg.getValue("general","routing");
-    m_assistCode.adjustPath(tmp);
-    if (m_assistCode.parseFile(tmp))
-	Debug(this,DebugInfo,"Parsed routing script: %s",tmp.c_str());
-    else if (tmp)
-	Debug(this,DebugWarn,"Failed to parse script: %s",tmp.c_str());
+    lock();
+    if (changed || m_assistCode.scriptChanged(tmp,s_basePath)) {
+	m_assistCode.clear();
+	m_assistCode.link(s_allowLink);
+	m_assistCode.trace(s_allowTrace);
+	m_assistCode.basePath(s_basePath);
+	m_assistCode.adjustPath(tmp);
+	if (m_assistCode.parseFile(tmp))
+	    Debug(this,DebugInfo,"Parsed routing script: %s",tmp.c_str());
+	else if (tmp)
+	    Debug(this,DebugWarn,"Failed to parse script: %s",tmp.c_str());
+    }
     JsGlobal::markUnused();
     unlock();
     NamedList* sect = cfg.getSection("scripts");

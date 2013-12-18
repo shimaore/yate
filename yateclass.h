@@ -5,21 +5,18 @@
  * Base classes and types, not related to the engine or telephony
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #ifndef __YATECLASS_H
@@ -88,6 +85,7 @@ typedef unsigned long in_addr_t;
 #define vsnprintf _vsnprintf
 #define snprintf _snprintf
 #define strdup _strdup
+#define strtoll _strtoi64
 #define open _open
 #define dup2 _dup2
 #define read _read
@@ -162,6 +160,30 @@ typedef int HANDLE;
 #endif
 
 #endif /* ! _WINDOWS */
+
+#ifndef LLONG_MAX
+#ifdef _I64_MAX
+#define LLONG_MAX _I64_MAX
+#else
+#define LLONG_MAX 9223372036854775807LL
+#endif
+#endif
+
+#ifndef LLONG_MIN
+#ifdef _I64_MIN
+#define LLONG_MIN _I64_MIN
+#else
+#define LLONG_MIN (-LLONG_MAX - 1LL)
+#endif
+#endif
+
+#ifndef ULLONG_MAX
+#ifdef _UI64_MAX
+#define ULLONG_MAX _UI64_MAX
+#else
+#define ULLONG_MAX 18446744073709551615ULL
+#endif
+#endif
 
 #ifndef O_LARGEFILE
 #define O_LARGEFILE 0
@@ -267,6 +289,13 @@ YATE_API bool debugAt(int level);
  * @return ANSI string that sets color corresponding to level
  */
 YATE_API const char* debugColor(int level);
+
+/**
+ * Get the name of a debugging or alarm level
+ * @param level The debug level
+ * @return Short C string describing the level
+ */
+YATE_API const char* debugLevelName(int level);
 
 /**
  * Holds a local debugging level that can be modified separately from the
@@ -439,7 +468,7 @@ void NDebug(const DebugEnabler* local, int level, const char* format, ...);
 #define DDebug Debug
 #else
 #ifdef _WINDOWS
-#define DDebug
+#define DDebug do { break; } while
 #else
 #define DDebug(arg...)
 #endif
@@ -449,7 +478,7 @@ void NDebug(const DebugEnabler* local, int level, const char* format, ...);
 #define XDebug Debug
 #else
 #ifdef _WINDOWS
-#define XDebug
+#define XDebug do { break; } while
 #else
 #define XDebug(arg...)
 #endif
@@ -459,7 +488,7 @@ void NDebug(const DebugEnabler* local, int level, const char* format, ...);
 #define NDebug Debug
 #else
 #ifdef _WINDOWS
-#define NDebug
+#define NDebug do { break; } while
 #else
 #define NDebug(arg...)
 #endif
@@ -487,6 +516,40 @@ YATE_API void Debug(const char* facility, int level, const char* format, ...) FO
  * @param format A printf() style format string
  */
 YATE_API void Debug(const DebugEnabler* local, int level, const char* format, ...) FORMAT_CHECK(3);
+
+/**
+ * Outputs a debug string and emits an alarm if a callback is installed
+ * @param component Component that emits the alarm
+ * @param level The level of the alarm
+ * @param format A printf() style format string
+ */
+YATE_API void Alarm(const char* component, int level, const char* format, ...) FORMAT_CHECK(3);
+
+/**
+ * Outputs a debug string and emits an alarm if a callback is installed
+ * @param component Pointer to a DebugEnabler holding component name and debugging settings
+ * @param level The level of the alarm
+ * @param format A printf() style format string
+ */
+YATE_API void Alarm(const DebugEnabler* component, int level, const char* format, ...) FORMAT_CHECK(3);
+
+/**
+ * Outputs a debug string and emits an alarm if a callback is installed
+ * @param component Component that emits the alarm
+ * @param info Extra alarm information
+ * @param level The level of the alarm
+ * @param format A printf() style format string
+ */
+YATE_API void Alarm(const char* component, const char* info, int level, const char* format, ...) FORMAT_CHECK(4);
+
+/**
+ * Outputs a debug string and emits an alarm if a callback is installed
+ * @param component Pointer to a DebugEnabler holding component name and debugging settings
+ * @param info Extra alarm information
+ * @param level The level of the alarm
+ * @param format A printf() style format string
+ */
+YATE_API void Alarm(const DebugEnabler* component, const char* info, int level, const char* format, ...) FORMAT_CHECK(4);
 
 /**
  * Outputs a string to the debug console with formatting
@@ -547,6 +610,12 @@ public:
      * @param outFunc Pointer to the output function, NULL to disable
      */
     static void setIntOut(void (*outFunc)(const char*,int) = 0);
+
+    /**
+     * Set the alarm hook callback
+     * @param alarmFunc Pointer to the alarm callback function, NULL to disable
+     */
+    static void setAlarmHook(void (*alarmFunc)(const char*,int,const char*,const char*) = 0);
 
     /**
      * Enable or disable the debug output
@@ -1217,6 +1286,14 @@ public:
     ObjList* append(const GenObject* obj, bool compact = true);
 
     /**
+     * Set unique entry in this list. If not found, append it to the list
+     * @param obj Pointer to the object to uniquely set in the list
+     * @param compact True to replace NULL values in list if possible
+     * @return A pointer to the set list item
+     */
+    ObjList* setUnique(const GenObject* obj, bool compact = true);
+
+    /**
      * Delete this list item
      * @param delobj True to delete the object (default)
      * @return Pointer to the object if not destroyed
@@ -1569,7 +1646,7 @@ public:
      * Constructor from unsigned numeric code
      * @param code Code of the Unicode character
      */
-    inline explicit UChar(unsigned int code = 0)
+    inline explicit UChar(uint32_t code = 0)
 	: m_chr(code)
 	{ encode(); }
 
@@ -1577,7 +1654,7 @@ public:
      * Constructor from signed numeric code
      * @param code Code of the Unicode character
      */
-    inline explicit UChar(signed int code)
+    inline explicit UChar(int32_t code)
 	: m_chr((code < 0) ? 0 : code)
 	{ encode(); }
 
@@ -1602,7 +1679,7 @@ public:
      * @param code Character code to assign
      * @return Reference to this object
      */
-    inline UChar& operator=(unsigned int code)
+    inline UChar& operator=(uint32_t code)
 	{ m_chr = code; encode(); return *this; }
 
     /**
@@ -1617,7 +1694,7 @@ public:
      * Get the Unicode value of the character
      * @return Code of the character as defined by Unicode
      */
-    inline unsigned int code() const
+    inline uint32_t code() const
 	{ return m_chr; }
 
     /**
@@ -1641,11 +1718,11 @@ public:
      * @param overlong Accept overlong UTF-8 sequences (dangerous!)
      * @return True if an Unicode character was decoded from string
      */
-    bool decode(const char*& str, unsigned int maxChar = 0x10ffff, bool overlong = false);
+    bool decode(const char*& str, uint32_t maxChar = 0x10ffff, bool overlong = false);
 
 private:
     void encode();
-    u_int32_t m_chr;
+    uint32_t m_chr;
     char m_str[8];
 };
 
@@ -1679,16 +1756,28 @@ public:
     explicit String(char value, unsigned int repeat = 1);
 
     /**
-     * Creates a new initialized string from an integer.
+     * Creates a new initialized string from a 32 bit integer.
      * @param value Value to convert to string
      */
-    explicit String(int value);
+    explicit String(int32_t value);
 
     /**
-     * Creates a new initialized string from an unsigned int.
+     * Creates a new initialized string from a 32 bit unsigned int.
      * @param value Value to convert to string
      */
-    explicit String(unsigned int value);
+    explicit String(uint32_t value);
+
+    /**
+     * Creates a new initialized string from a 64 bit integer.
+     * @param value Value to convert to string
+     */
+    explicit String(int64_t value);
+
+    /**
+     * Creates a new initialized string from a 64 bit unsigned int.
+     * @param value Value to convert to string
+     */
+    explicit String(uint64_t value);
 
     /**
      * Creates a new initialized string from a boolean.
@@ -1777,7 +1866,7 @@ public:
      * @param overlong Accept overlong UTF-8 sequences (dangerous!)
      * @return Count of Unicode characters, -1 if not valid UTF-8
      */
-    static int lenUtf8(const char* value, unsigned int maxChar = 0x10ffff, bool overlong = false);
+    static int lenUtf8(const char* value, uint32_t maxChar = 0x10ffff, bool overlong = false);
 
     /**
      * Get the number of characters in the string assuming UTF-8 encoding
@@ -1785,7 +1874,7 @@ public:
      * @param overlong Accept overlong UTF-8 sequences (dangerous!)
      * @return Count of Unicode characters, -1 if not valid UTF-8
      */
-    inline int lenUtf8(unsigned int maxChar = 0x10ffff, bool overlong = false) const
+    inline int lenUtf8(uint32_t maxChar = 0x10ffff, bool overlong = false) const
 	{ return lenUtf8(m_string,maxChar,overlong); }
 
 
@@ -1796,7 +1885,7 @@ public:
      * @param overlong Accept overlong UTF-8 sequences (dangerous!)
      * @return Count of invalid UTF-8 sequences that were replaced
      */
-    int fixUtf8(const char* replace = 0, unsigned int maxChar = 0x10ffff, bool overlong = false);
+    int fixUtf8(const char* replace = 0, uint32_t maxChar = 0x10ffff, bool overlong = false);
 
     /**
      * Check if a string starts with UTF-8 Byte Order Mark
@@ -1927,6 +2016,19 @@ public:
 	long int maxvalue = LONG_MAX, bool clamp = true) const;
 
     /**
+     * Convert the string to an 64 bit integer value.
+     * @param defvalue Default to return if the string is not a number
+     * @param base Numeration base, 0 to autodetect
+     * @param minvalue Minimum value allowed
+     * @param maxvalue Maximum value allowed
+     * @param clamp Control the out of bound values: true to adjust to the nearest
+     *  bound, false to return the default value
+     * @return The 64 bit integer interpretation or defvalue.
+     */
+    int64_t toInt64(int64_t defvalue = 0, int base = 0, int64_t minvalue = LLONG_MIN,
+	int64_t maxvalue = LLONG_MAX, bool clamp = true) const;
+
+    /**
      * Convert the string to a floating point value.
      * @param defvalue Default to return if the string is not a number
      * @return The floating-point interpretation or defvalue.
@@ -2009,12 +2111,14 @@ public:
 
     /**
      * Assignment operator.
+     * @param value Value to assign to the string
      */
     inline String& operator=(const String& value)
 	{ return operator=(value.c_str()); }
 
     /**
      * Assignment from String* operator.
+     * @param value Value to assign to the string
      * @see TelEngine::strcpy
      */
     inline String& operator=(const String* value)
@@ -2022,33 +2126,51 @@ public:
 
     /**
      * Assignment from char* operator.
+     * @param value Value to assign to the string
      * @see TelEngine::strcpy
      */
     String& operator=(const char* value);
 
     /**
      * Assignment operator for single characters.
+     * @param value Value to assign to the string
      */
     String& operator=(char value);
 
     /**
-     * Assignment operator for integers.
+     * Assignment operator for 32 bit integers.
+     * @param value Value to assign to the string
      */
-    String& operator=(int value);
+    String& operator=(int32_t value);
 
     /**
-     * Assignment operator for unsigned integers.
+     * Assignment operator for 32 bit unsigned integers.
+     * @param value Value to assign to the string
      */
-    String& operator=(unsigned int value);
+    String& operator=(uint32_t value);
+
+    /**
+     * Assignment operator for 64 bit integers.
+     * @param value Value to assign to the string
+     */
+    String& operator=(int64_t value);
+
+    /**
+     * Assignment operator for 64 bit unsigned integers.
+     * @param value Value to assign to the string
+     */
+    String& operator=(uint64_t value);
 
     /**
      * Assignment operator for booleans.
+     * @param value Value to assign to the string
      */
     inline String& operator=(bool value)
 	{ return operator=(boolText(value)); }
 
     /**
      * Appending operator for strings.
+     * @param value Value to assign to the string
      * @see TelEngine::strcat
      */
     inline String& operator+=(const char* value)
@@ -2056,21 +2178,37 @@ public:
 
     /**
      * Appending operator for single characters.
+     * @param value Value to append to the string
      */
     String& operator+=(char value);
 
     /**
-     * Appending operator for integers.
+     * Appending operator for 32 bit integers.
+     * @param value Value to append to the string
      */
-    String& operator+=(int value);
+    String& operator+=(int32_t value);
 
     /**
-     * Appending operator for unsigned integers.
+     * Appending operator for 32 bit unsigned integers.
+     * @param value Value to append to the string
      */
-    String& operator+=(unsigned int value);
+    String& operator+=(uint32_t value);
+
+    /**
+     * Appending operator for 64 bit integers.
+     * @param value Value to append to the string
+     */
+    String& operator+=(int64_t value);
+
+    /**
+     * Appending operator for 64 bit unsigned integers.
+     * @param value Value to append to the string
+     */
+    String& operator+=(uint64_t value);
 
     /**
      * Appending operator for booleans.
+     * @param value Value to append to the string
      */
     inline String& operator+=(bool value)
 	{ return operator+=(boolText(value)); }
@@ -2120,15 +2258,27 @@ public:
 	{ return operator+=(value); }
 
     /**
-     * Stream style appending operator for integers
+     * Stream style appending operator for 32 bit integers
      */
-    inline String& operator<<(int value)
+    inline String& operator<<(int32_t value)
 	{ return operator+=(value); }
 
     /**
-     * Stream style appending operator for unsigned integers
+     * Stream style appending operator for 32 bit unsigned integers
      */
-    inline String& operator<<(unsigned int value)
+    inline String& operator<<(uint32_t value)
+	{ return operator+=(value); }
+
+    /**
+     * Stream style appending operator for 64 bit integers
+     */
+    inline String& operator<<(int64_t value)
+	{ return operator+=(value); }
+
+    /**
+     * Stream style appending operator for 64 bit unsigned integers
+     */
+    inline String& operator<<(uint64_t value)
 	{ return operator+=(value); }
 
     /**
@@ -2965,7 +3115,7 @@ public:
     GenObject* operator[](const String& str) const;
 
     /**
-     * Get the item in the list that holds an object
+     * Get the item in the list that holds an object.
      * The item is searched sequentially in the lists, not using it's String hash
      * @param obj Pointer to the object to search for
      * @return Pointer to the found item or NULL
@@ -2998,9 +3148,22 @@ public:
      * Delete the list item that holds a given object
      * @param obj Object to search in the list
      * @param delobj True to delete the object (default)
+     * @param useHash True to use object hash to identify the list it belongs to
      * @return Pointer to the object if not destroyed
      */
-    GenObject* remove(GenObject* obj, bool delobj = true);
+    GenObject* remove(GenObject* obj, bool delobj = true, bool useHash = false);
+
+    /**
+     * Delete the item in the list that holds an object by String value
+     * @param str String value (toString) of the object to remove
+     * @param delobj True to delete the object (default)
+     * @return Pointer to the object if not destroyed
+     */
+    inline GenObject* remove(const String& str, bool delobj = true)
+    {
+	ObjList* n = find(str);
+	return n ? n->remove(delobj) : 0;
+    }
 
     /**
      * Clear the list and optionally delete all contained objects
@@ -3560,13 +3723,33 @@ public:
      * Build this data block from a hexadecimal string representation.
      * Each octet must be represented in the input string with 2 hexadecimal characters.
      * If a separator is specified, the octets in input string must be separated using
-     *  exactly 1 separator. Only 1 leading or 1 trailing separators are allowed
+     *  exactly 1 separator. Only 1 leading or 1 trailing separators are allowed.
      * @param data Input character string
      * @param len Length of the input string
      * @param sep Separator character used between octets. 0 if no separator is expected
      * @return True if the input string was succesfully parsed, false otherwise
      */
-    bool unHexify(const char* data, unsigned int len, char sep = 0);
+    bool unHexify(const char* data, unsigned int len, char sep);
+
+    /**
+     * Build this data block from a hexadecimal string representation.
+     * Each octet must be represented in the input string with 2 hexadecimal characters.
+     * This method guesses if separators are used. If so the octets in input string must be
+     *  separated using exactly 1 separator. Only 1 leading or 1 trailing separators are allowed.
+     * @param data Input character string
+     * @param len Length of the input string
+     * @return True if the input string was succesfully parsed, false otherwise
+     */
+    bool unHexify(const char* data, unsigned int len);
+
+    /**
+     * Build this data block from a hexadecimal string representation.
+     * This version parses a String and guesses separators presence.
+     * @param data Input character string
+     * @return True if the input string was succesfully parsed, false otherwise
+     */
+    inline bool unHexify(const String& data)
+	{ return unHexify(data.c_str(),data.length()); }
 
     /**
      * Create an escaped string suitable for use in SQL queries
@@ -3581,10 +3764,187 @@ private:
 };
 
 /**
+ * Abstract base class representing a hash calculator
+ * @short An abstract hashing class
+ */
+class YATE_API Hasher
+{
+public:
+    /**
+     * Destroy the instance, free allocated memory
+     */
+    virtual ~Hasher();
+
+    /**
+     * Clear the digest and prepare for reuse
+     */
+    virtual void clear() = 0;
+
+    /**
+     * Finalize the digest computation, make result ready.
+     * Subsequent calls to @ref update() will fail
+     */
+    virtual void finalize() = 0;
+
+    /**
+     * Returns a pointer to the raw 16-byte binary value of the message digest.
+     * The digest is finalized if if wasn't already
+     * @return Pointer to the raw digest data or NULL if some error occured
+     */
+    virtual const unsigned char* rawDigest() = 0;
+
+    /**
+     * Returns the standard hexadecimal representation of the message digest.
+     * The digest is finalized if if wasn't already
+     * @return A String which holds the hex digest or a null one if some error occured
+     */
+    inline const String& hexDigest()
+	{ finalize(); return m_hex; }
+
+    /**
+     * Update the digest from a buffer of data
+     * @param buf Pointer to the data to be included in digest
+     * @param len Length of data in the buffer
+     * @return True if success, false if @ref finalize() was already called
+     */
+    inline bool update(const void* buf, unsigned int len)
+	{ return updateInternal(buf,len); }
+
+    /**
+     * Update the digest from the content of a DataBlock
+     * @param data Data to be included in digest
+     * @return True if success, false if @ref finalize() was already called
+     */
+    inline bool update(const DataBlock& data)
+	{ return updateInternal(data.data(), data.length()); }
+
+    /**
+     * Update the digest from the content of a String
+     * @param str String to be included in digest
+     * @return True if success, false if @ref finalize() was already called
+     */
+    inline bool update(const String& str)
+	{ return updateInternal(str.c_str(), str.length()); }
+
+    /**
+     * Digest updating operator for Strings
+     * @param value String to be included in digest
+     */
+    inline Hasher& operator<<(const String& value)
+	{ update(value); return *this; }
+
+    /**
+     * Digest updating operator for DataBlocks
+     * @param data Data to be included in digest
+     */
+    inline Hasher& operator<<(const DataBlock& data)
+	{ update(data); return *this; }
+
+    /**
+     * Digest updating operator for C strings
+     * @param value String to be included in digest
+     */
+    Hasher& operator<<(const char* value);
+
+    /**
+     * Start a HMAC calculation, initialize the hash and the outer pad
+     * @param opad Outer pad to be filled from key
+     * @param key Secret key
+     * @param keyLen Secret key length
+     * @return True if hash and outer pad were successfully initialized
+     */
+    bool hmacStart(DataBlock& opad, const void* key, unsigned int keyLen);
+
+    /**
+     * Start a HMAC calculation, initialize the hash and the outer pad
+     * @param opad Outer pad to be filled from key
+     * @param key Secret key
+     * @return True if hash and outer pad were successfully initialized
+     */
+    inline bool hmacStart(DataBlock& opad, const DataBlock& key)
+	{ return hmacStart(opad,key.data(),key.length()); }
+
+    /**
+     * Start a HMAC calculation, initialize the hash and the outer pad
+     * @param opad Outer pad to be filled from key
+     * @param key Secret key string
+     * @return True if hash and outer pad were successfully initialized
+     */
+    inline bool hmacStart(DataBlock& opad, const String& key)
+	{ return hmacStart(opad,key.c_str(),key.length()); }
+
+    /**
+     * Finalize a HMAC calculation with this hash
+     * @param opad Outer pad as filled by hmacStart
+     * @return True on success, HMAC result is left in hasher
+     */
+    bool hmacFinal(const DataBlock& opad);
+
+    /**
+     * Compute a Message Authentication Code with this hash
+     * @param key Secret key
+     * @param keyLen Secret key length
+     * @param msg Message to authenticate
+     * @param msgLen Message length
+     * @return True if HMAC was computed correctly, result is left in hasher
+     */
+    bool hmac(const void* key, unsigned int keyLen, const void* msg, unsigned int msgLen);
+
+    /**
+     * Compute a Message Authentication Code with this hash
+     * @param key Secret key
+     * @param msg Message to authenticate
+     * @return True if HMAC was computed correctly, result is left in hasher
+     */
+    inline bool hmac(const DataBlock& key, const DataBlock& msg)
+	{ return hmac(key.data(),key.length(),msg.data(),msg.length()); }
+
+    /**
+     * Compute a Message Authentication Code with this hash
+     * @param key Secret key string
+     * @param msg Message string to authenticate
+     * @return True if HMAC was computed correctly, result is left in hasher
+     */
+    inline bool hmac(const String& key, const String& msg)
+	{ return hmac(key.c_str(),key.length(),msg.c_str(),msg.length()); }
+
+    /**
+     * Return the length of the raw binary digest
+     * @return Length of the digest in octets
+     */
+    virtual unsigned int hashLength() const = 0;
+
+    /**
+     * Return the size of the block used in HMAC calculations
+     * @return HMAC block size in octets, usually 64
+     */
+    virtual unsigned int hmacBlockSize() const;
+
+protected:
+    /**
+     * Default constructor
+     */
+    inline Hasher()
+	: m_private(0)
+	{ }
+
+    /**
+     * Update the digest from a buffer of data
+     * @param buf Pointer to the data to be included in digest
+     * @param len Length of data in the buffer
+     * @return True if success, false if @ref finalize() was already called
+     */
+    virtual bool updateInternal(const void* buf, unsigned int len) = 0;
+
+    void* m_private;
+    String m_hex;
+};
+
+/**
  * A class to compute and check MD5 digests
  * @short A standard MD5 digest calculator
  */
-class YATE_API MD5
+class YATE_API MD5 : public Hasher
 {
 public:
     /**
@@ -3618,73 +3978,32 @@ public:
     MD5(const String& str);
 
     /**
-     * Destroy the instance, free allocated memory
-     */
-    ~MD5();
-
-    /**
      * Assignment operator.
      */
     MD5& operator=(const MD5& original);
 
     /**
+     * Destroy the instance, free allocated memory
+     */
+    virtual ~MD5();
+
+    /**
      * Clear the digest and prepare for reuse
      */
-    void clear();
+    virtual void clear();
 
     /**
      * Finalize the digest computation, make result ready.
      * Subsequent calls to @ref update() will fail
      */
-    void finalize();
-
-    /**
-     * Update the digest from a buffer of data
-     * @param buf Pointer to the data to be included in digest
-     * @param len Length of data in the buffer
-     * @return True if success, false if @ref finalize() was already called
-     */
-    bool update(const void* buf, unsigned int len);
-
-    /**
-     * Update the digest from the content of a DataBlock
-     * @param data Data to be included in digest
-     * @return True if success, false if @ref finalize() was already called
-     */
-    inline bool update(const DataBlock& data)
-	{ return update(data.data(), data.length()); }
-
-    /**
-     * Update the digest from the content of a String
-     * @param str String to be included in digest
-     * @return True if success, false if @ref finalize() was already called
-     */
-    inline bool update(const String& str)
-	{ return update(str.c_str(), str.length()); }
-
-    /**
-     * MD5 updating operator for Strings
-     */
-    inline MD5& operator<<(const String& value)
-	{ update(value); return *this; }
-
-    /**
-     * MD5 updating operator for DataBlocks
-     */
-    inline MD5& operator<<(const DataBlock& data)
-	{ update(data); return *this; }
-
-    /**
-     * MD5 updating operator for C strings
-     */
-    MD5& operator<<(const char* value);
+    virtual void finalize();
 
     /**
      * Returns a pointer to the raw 16-byte binary value of the message digest.
      * The digest is finalized if if wasn't already
      * @return Pointer to the raw digest data or NULL if some error occured
      */
-    const unsigned char* rawDigest();
+    virtual const unsigned char* rawDigest();
 
     /**
      * Return the length of the raw binary digest
@@ -3694,16 +4013,17 @@ public:
 	{ return 16; }
 
     /**
-     * Returns the standard hexadecimal representation of the message digest.
-     * The digest is finalized if if wasn't already
-     * @return A String which holds the hex digest or a null one if some error occured
+     * Return the length of the raw binary digest
+     * @return Length of the digest in octets
      */
-    const String& hexDigest();
+    virtual unsigned int hashLength() const
+	{ return 16; }
+
+protected:
+    bool updateInternal(const void* buf, unsigned int len);
 
 private:
     void init();
-    void* m_private;
-    String m_hex;
     unsigned char m_bin[16];
 };
 
@@ -3711,7 +4031,7 @@ private:
  * A class to compute and check SHA1 digests
  * @short A standard SHA1 digest calculator
  */
-class YATE_API SHA1
+class YATE_API SHA1 : public Hasher
 {
 public:
     /**
@@ -3745,73 +4065,32 @@ public:
     SHA1(const String& str);
 
     /**
-     * Destroy the instance, free allocated memory
-     */
-    ~SHA1();
-
-    /**
      * Assignment operator.
      */
     SHA1& operator=(const SHA1& original);
 
     /**
+     * Destroy the instance, free allocated memory
+     */
+    virtual ~SHA1();
+
+    /**
      * Clear the digest and prepare for reuse
      */
-    void clear();
+    virtual void clear();
 
     /**
      * Finalize the digest computation, make result ready.
      * Subsequent calls to @ref update() will fail
      */
-    void finalize();
-
-    /**
-     * Update the digest from a buffer of data
-     * @param buf Pointer to the data to be included in digest
-     * @param len Length of data in the buffer
-     * @return True if success, false if @ref finalize() was already called
-     */
-    bool update(const void* buf, unsigned int len);
-
-    /**
-     * Update the digest from the content of a DataBlock
-     * @param data Data to be included in digest
-     * @return True if success, false if @ref finalize() was already called
-     */
-    inline bool update(const DataBlock& data)
-	{ return update(data.data(), data.length()); }
-
-    /**
-     * Update the digest from the content of a String
-     * @param str String to be included in digest
-     * @return True if success, false if @ref finalize() was already called
-     */
-    inline bool update(const String& str)
-	{ return update(str.c_str(), str.length()); }
-
-    /**
-     * SHA1 updating operator for Strings
-     */
-    inline SHA1& operator<<(const String& value)
-	{ update(value); return *this; }
-
-    /**
-     * SHA1 updating operator for DataBlocks
-     */
-    inline SHA1& operator<<(const DataBlock& data)
-	{ update(data); return *this; }
-
-    /**
-     * SHA1 updating operator for C strings
-     */
-    SHA1& operator<<(const char* value);
+    virtual void finalize();
 
     /**
      * Returns a pointer to the raw 20-byte binary value of the message digest.
      * The digest is finalized if if wasn't already
      * @return Pointer to the raw digest data or NULL if some error occured
      */
-    const unsigned char* rawDigest();
+    virtual const unsigned char* rawDigest();
 
     /**
      * Return the length of the raw binary digest
@@ -3821,17 +4100,105 @@ public:
 	{ return 20; }
 
     /**
-     * Returns the standard hexadecimal representation of the message digest.
-     * The digest is finalized if if wasn't already
-     * @return A String which holds the hex digest or a null one if some error occured
+     * Return the length of the raw binary digest
+     * @return Length of the digest in octets
      */
-    const String& hexDigest();
+    virtual unsigned int hashLength() const
+	{ return 20; }
+
+protected:
+    bool updateInternal(const void* buf, unsigned int len);
 
 private:
     void init();
-    void* m_private;
-    String m_hex;
     unsigned char m_bin[20];
+};
+
+/**
+ * A class to compute and check SHA256 digests
+ * @short A standard SHA256 digest calculator
+ */
+class YATE_API SHA256 : public Hasher
+{
+public:
+    /**
+     * Construct a fresh initialized instance
+     */
+    SHA256();
+
+    /**
+     * Copy constructor
+     * @param original SHA256 instance to copy
+     */
+    SHA256(const SHA256& original);
+
+    /**
+     * Construct a digest from a buffer of data
+     * @param buf Pointer to the data to be included in digest
+     * @param len Length of data in the buffer
+     */
+    SHA256(const void* buf, unsigned int len);
+
+    /**
+     * Construct a digest from a binary DataBlock
+     * @param data Binary data to be included in digest
+     */
+    SHA256(const DataBlock& data);
+
+    /**
+     * Construct a digest from a String
+     * @param str String to be included in digest
+     */
+    SHA256(const String& str);
+
+    /**
+     * Assignment operator.
+     */
+    SHA256& operator=(const SHA256& original);
+
+    /**
+     * Destroy the instance, free allocated memory
+     */
+    virtual ~SHA256();
+
+    /**
+     * Clear the digest and prepare for reuse
+     */
+    virtual void clear();
+
+    /**
+     * Finalize the digest computation, make result ready.
+     * Subsequent calls to @ref update() will fail
+     */
+    virtual void finalize();
+
+    /**
+     * Returns a pointer to the raw 32-byte binary value of the message digest.
+     * The digest is finalized if if wasn't already
+     * @return Pointer to the raw digest data or NULL if some error occured
+     */
+    virtual const unsigned char* rawDigest();
+
+    /**
+     * Return the length of the raw binary digest
+     * @return Constant value of 32
+     */
+    inline static unsigned int rawLength()
+	{ return 32; }
+
+    /**
+     * Return the length of the raw binary digest
+     * @return Length of the digest in octets
+     */
+    virtual unsigned int hashLength() const
+	{ return 32; }
+
+protected:
+    bool updateInternal(const void* buf, unsigned int len);
+
+private:
+    void init();
+    unsigned char m_bin[32];
 };
 
 /**
@@ -3986,7 +4353,12 @@ public:
      * @param param Parameter to set or add
      * @return Reference to this NamedList
      */
-    NamedList& setParam(NamedString* param);
+    inline NamedList& setParam(NamedString* param)
+    {
+	if (param)
+	    m_params.setUnique(param);
+	return *this;
+    }
 
     /**
      * Set a named string in the parameter list.
@@ -3994,7 +4366,7 @@ public:
      * @param value Value of the string
      * @return Reference to this NamedList
      */
-    NamedList& setParam(const char* name, const char* value);
+    NamedList& setParam(const String& name, const char* value);
 
     /**
      * Clears all instances of a named string in the parameter list.
@@ -4051,9 +4423,11 @@ public:
      * @param original Named list to copy parameters from
      * @param prefix Prefix to match in parameter names, must not be NULL
      * @param skipPrefix Skip over the prefix when building new parameter name
+     * @param replace Set to true to replace list parameter instead of adding a new one
      * @return Reference to this NamedList
      */
-    NamedList& copySubParams(const NamedList& original, const String& prefix, bool skipPrefix = true);
+    NamedList& copySubParams(const NamedList& original, const String& prefix,
+	bool skipPrefix = true, bool replace = false);
 
     /**
      * Check if we have a parameter that starts with prefix
@@ -4167,6 +4541,20 @@ public:
      * @return Reference to a static empty named list
      */
     static const NamedList& empty();
+
+    /**
+     * Get the parameters list
+     * @return Pointer to the parameters list
+     */
+    inline ObjList* paramList()
+	{ return &m_params; }
+
+    /**
+     * Get the parameters list
+     * @return Pointer to the parameters list
+     */
+    inline const ObjList* paramList() const
+	{ return &m_params; }
 
 private:
     NamedList(); // no default constructor please
@@ -4433,11 +4821,12 @@ public:
     static void startUsingNow();
 
     /**
-     * Disable some safety and sanity check features.
-     * This provides a performance improvement but makes the code less safe and
-     *  more difficult to debug locking issues.
+     * Enable some safety and sanity check features.
+     * This provides a safer code and easier locking debugging at the price of performance penalty.
+     * This method must be called early and not changed after initialization
+     * @param safe True to enable locking safety measures, false to disable
      */
-    static void disableSafety();
+    static void enableSafety(bool safe = true);
 };
 
 /**
@@ -4513,7 +4902,7 @@ public:
 
     /**
      * Get the number of currently locked mutexes
-     * @return Count of locked mutexes, should be zero at program exit
+     * @return Count of locked mutexes, -1 if unknown (not tracked)
      */
     static int locks();
 
@@ -4648,7 +5037,7 @@ public:
 
     /**
      * Get the number of currently locked (waiting) semaphores
-     * @return Count of locked semaphores, should be zero at program exit
+     * @return Count of locked semaphores, -1 if unknown (not tracked)
      */
     static int locks();
 
@@ -5091,6 +5480,26 @@ class YATE_API SocketAddr : public GenObject
 {
 public:
     /**
+     * Known address families
+     */
+    enum Family {
+	Unknown = AF_UNSPEC,
+	IPv4 = AF_INET,
+	AfMax = AF_MAX,
+	AfUnsupported = AfMax,
+#ifdef AF_INET6
+	IPv6 = AF_INET6,
+#else
+	IPv6 = AfUnsupported + 1,
+#endif
+#ifdef HAS_AF_UNIX
+	Unix = AF_UNIX,
+#else
+	Unix = AfUnsupported + 2,
+#endif
+    };
+
+    /**
      * Default constructor of an empty address
      */
     inline SocketAddr()
@@ -5194,6 +5603,28 @@ public:
 	{ return m_address ? m_address->sa_family : 0; }
 
     /**
+     * Retrieve address family name
+     * @return Address family name
+     */
+    inline const char* familyName()
+	{ return lookupFamily(family()); }
+
+    /**
+     * Retrieve the sin6_scope_id value of an IPv6 address
+     * @return The requested value (it may be 0), 0 if not available
+     */
+    inline unsigned int scopeId() const
+	{ return scopeId(address()); }
+
+    /**
+     * Set the sin6_scope_id value of an IPv6 address
+     * @param val Value to set
+     * @return True on success, false if not available
+     */
+    inline bool scopeId(unsigned int val)
+	{ return scopeId(address(),val); }
+
+    /**
      * Get the host of this address
      * @return Host name as String
      */
@@ -5201,7 +5632,19 @@ public:
 	{ return m_host; }
 
     /**
-     * Set the hostname of this address
+     * Get the host and port of this address
+     * @return Address String (host:port)
+     */
+    inline const String& addr() const {
+	    if (!m_addr)
+		updateAddr();
+	    return m_addr;
+	}
+
+    /**
+     * Set the hostname of this address.
+     * Guess address family if not initialized
+     * @param name Host to set
      * @return True if new host set, false if name could not be parsed
      */
     virtual bool host(const String& name);
@@ -5234,11 +5677,178 @@ public:
 	{ return m_length; }
 
     /**
+     * Check if this address is empty or null
+     * @return True if the address is empty or '0.0.0.0' (IPv4) or '::' IPv6
+     */
+    inline bool isNullAddr() const
+	{ return isNullAddr(m_host,family()); }
+
+    /**
      * Check if an address family is supported by the library
      * @param family Family of the address to check
      * @return True if the address family is supported
      */
     static bool supports(int family);
+
+    /**
+     * Retrieve the family of an address
+     * @param addr The address to check
+     * @return Address family
+     */
+    static int family(const String& addr);
+
+    /**
+     * Convert the host address to a String
+     * @param buf Destination buffer
+     * @param addr Socket address
+     * @return True on success, false if address family is not supported
+     */
+    static bool stringify(String& buf, struct sockaddr* addr);
+
+    /**
+     * Put a host address to a buffer
+     * @param buf Destination buffer. It must be large enough to keep the address
+     *  (4 bytes for IPv4, 16 bytes for IPv6)
+     * @param host The host address
+     * @param family Address family, set it to Unknown to detect
+     * @return Address family, Unknown on failure
+     */
+    static inline int unStringify(uint8_t* buf, const String& host,
+	int family = Unknown) {
+	    SocketAddr sa(family);
+	    return sa.host(host) ? copyAddr(buf,sa.address()) : Unknown;
+	}
+
+    /**
+     * Copy a host address to a buffer
+     * @param buf Destination buffer. It must be large enough to keep the address
+     *  (4 bytes for IPv4, 16 bytes for IPv6)
+     * @param addr The host address
+     * @return Address family, Unknown on failure
+     */
+    static int copyAddr(uint8_t* buf, struct sockaddr* addr);
+
+    /**
+     * Retrieve the scope id value of an IPv6 address
+     * @param addr The address
+     * @return The requested value (it may be 0), 0 if not available
+     */
+    static inline unsigned int scopeId(struct sockaddr* addr) {
+#ifdef AF_INET6
+	    if (addr && addr->sa_family == AF_INET6)
+		return ((struct sockaddr_in6*)addr)->sin6_scope_id;
+#endif
+	    return 0;
+	}
+
+    /**
+     * Set the scope id value of an IPv6 address
+     * @param addr Address to set
+     * @param val Value to set
+     * @return True on success, false if not available
+     */
+    static inline bool scopeId(struct sockaddr* addr, unsigned int val) {
+#ifdef AF_INET6
+	    if (addr && addr->sa_family == AF_INET6) {
+		((struct sockaddr_in6*)addr)->sin6_scope_id = val;
+		return true;
+	    }
+#endif
+	    return false;
+	}
+
+    /**
+     * Append an address to a buffer
+     * @param buf Destination buffer
+     * @param addr Address to append
+     * @param family Address family, set it to Unknown to detect
+     * @return Buffer address
+     */
+    static String& appendAddr(String& buf, const String& addr, int family = Unknown);
+
+    /**
+     * Append an address to a buffer in the form addr:port
+     * @param buf Destination buffer
+     * @param addr Address to append
+     * @param port Port to append
+     * @param family Address family, set it to Unknown to detect
+     * @return Buffer address
+     */
+    static inline String& appendTo(String& buf, const String& addr, int port,
+	int family = Unknown) {
+	    appendAddr(buf,addr,family) << ":" << port;
+	    return buf;
+	}
+
+    /**
+     * Append an address to a buffer in the form addr:port
+     * @param addr Address to append
+     * @param port Port to append
+     * @param family Address family, set it to Unknown to detect
+     * @return A String with concatenated address and port
+     */
+    static inline String appendTo(const String& addr, int port, int family = Unknown) {
+	    String buf;
+	    appendTo(buf,addr,port,family);
+	    return buf;
+	}
+
+    /**
+     * Check if an address is empty or null
+     * @param addr Address to check
+     * @param family Address family, set it to Unknown to detect
+     * @return True if the address is empty or '0.0.0.0' (IPv4) or '::' IPv6
+     */
+    static bool isNullAddr(const String& addr, int family = Unknown);
+
+    /**
+     * Split an interface from address
+     * An interface may be present in addr after a percent char (e.g. fe80::23%eth0)
+     * It is safe call this method with the same destination and source string
+     * @param buf Source buffer
+     * @param addr Destination buffer for address
+     * @param iface Optional pointer to be filled with interface name
+     */
+    static void splitIface(const String& buf, String& addr, String* iface = 0);
+
+    /**
+     * Split an address into ip/port.
+     * Handled formats: addr, addr:port, [addr], [addr]:port
+     * It is safe call this method with the same destination and source string
+     * @param buf Source buffer
+     * @param addr Destination buffer for address
+     * @param port Destination port
+     * @param portPresent Set it to true if the port is always present after the last ':'.
+     *  This will handle IPv6 addresses without square brackets and port present
+     *  (e.g. fe80::23:5060 will split into addr=fe80::23 and port=5060)
+     */
+    static void split(const String& buf, String& addr, int& port, bool portPresent = false);
+
+    /**
+     * Retrieve address family name
+     * @param family Address family to retrieve
+     * @return Address family name
+     */
+    static inline const char* lookupFamily(int family)
+	{ return lookup(family,s_familyName); }
+
+    /**
+     * Retrieve IPv4 null address
+     * @return IPv4 null address (0.0.0.0)
+     */
+    static const String& ipv4NullAddr();
+
+    /**
+     * Retrieve IPv6 null address
+     * @return IPv6 null address (::)
+     */
+    static const String& ipv6NullAddr();
+
+    /**
+     * Retrieve the family name dictionary
+     * @return Pointer to family name dictionary
+     */
+    static const TokenDict* dictFamilyName();
 
 protected:
     /**
@@ -5246,9 +5856,18 @@ protected:
      */
     virtual void stringify();
 
+    /**
+     * Store host:port in m_addr
+     */
+    virtual void updateAddr() const;
+
     struct sockaddr* m_address;
     socklen_t m_length;
     String m_host;
+    mutable String m_addr;
+
+private:
+    static const TokenDict s_familyName[];
 };
 
 /**
@@ -5809,10 +6428,43 @@ public:
      * Types of service
      */
     enum TOS {
+	Normal         = 0,
 	LowDelay       = IPTOS_LOWDELAY,
 	MaxThroughput  = IPTOS_THROUGHPUT,
 	MaxReliability = IPTOS_RELIABILITY,
 	MinCost        = IPTOS_MINCOST,
+    };
+
+    /**
+     * DiffServ bits
+     */
+    enum DSCP {
+	DefaultPHB     = 0x00,
+	// Class selectors
+	CS0            = 0x00,
+	CS1            = 0x20,
+	CS2            = 0x40,
+	CS3            = 0x60,
+	CS4            = 0x80,
+	CS5            = 0xa0,
+	CS6            = 0xc0,
+	CS7            = 0xe0,
+	// Assured forwarding
+	AF11           = 0x28,
+	AF12           = 0x30,
+	AF13           = 0x38,
+	AF21           = 0x48,
+	AF22           = 0x50,
+	AF23           = 0x58,
+	AF31           = 0x68,
+	AF32           = 0x70,
+	AF33           = 0x78,
+	AF41           = 0x88,
+	AF42           = 0x90,
+	AF43           = 0x98,
+	// Expedited forwarding
+	ExpeditedFwd   = 0xb8,
+	VoiceAdmit     = 0xb0,
     };
 
     /**
@@ -5904,6 +6556,12 @@ public:
     static int socketError();
 
     /**
+     * Retrieve the keyword lookup table for TOS / DSCP values
+     * @return Pointer to keyword dictionary for TOS and DSCP
+     */
+    static const TokenDict* tosValues();
+
+    /**
      * Set socket options
      * @param level Level of the option to set
      * @param name Socket option for which the value is to be set
@@ -5912,6 +6570,23 @@ public:
      * @return True if operation was successfull, false if an error occured
      */
     virtual bool setOption(int level, int name, const void* value = 0, socklen_t length = 0);
+
+    /**
+     * Set or reset socket IPv6 only option.
+     * This option will tell to an IPv6 socket to accept only IPv6 packets.
+     * IPv4 packets will be accepted if disabled.
+     * This method will fail for non PF_INET6 sockets
+     * @param on True to set, false to reset it
+     * @return True if operation was successfull, false if an error occured
+     */
+    inline bool setIpv6OnlyOption(bool on) {
+#if defined(IPPROTO_IPV6) && defined(IPV6_V6ONLY)
+	    int value = on ? 1 : 0;
+	    return setOption(IPPROTO_IPV6,IPV6_V6ONLY,&value,sizeof(value));
+#else
+	    return false;
+#endif
+	}
 
     /**
      * Get socket options
@@ -5940,11 +6615,20 @@ public:
 	{ return false; }
 
     /**
-     * Set the Type of Service on the IP level of this socket
-     * @param tos New TOS bits to set
+     * Set the Type of Service or Differentiated Services Code Point on the IP level of this socket
+     * @param tos New TOS or DiffServ bits
      * @return True if operation was successfull, false if an error occured
      */
     virtual bool setTOS(int tos);
+
+    /**
+     * Set the Type of Service or Differentiated Services Code Point on the IP level of this socket
+     * @param tos Keyword describing new TOS or DSCP value
+     * @param defTos Default TOS or DiffServ value to set if the keyword is not recognized
+     * @return True if operation was successfull, false if an error occured
+     */
+    inline bool setTOS(const char* tos, int defTos = Normal)
+	{ return setTOS(lookup(tos,tosValues(),defTos)); }
 
     /**
      * Set the blocking or non-blocking operation mode of the socket

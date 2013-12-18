@@ -5,21 +5,18 @@
  * Registration, authentication, authorization and accounting from a database.
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include <yatephone.h>
@@ -293,7 +290,7 @@ static bool copyParams(Message &msg, Array *a, const String& resultName)
 		m->retValue() = *s;
 	    else
 		m->setParam(*name,*s);
-	}	
+	}
 	if (j>1) {
 	    if (m->retValue().null()) {
 		Debug(&module,DebugWarn,"Skipping void route #%d",j);
@@ -402,7 +399,7 @@ void AAAHandler::initQuery()
 void AAAHandler::chkConfig()
 {
     if (m_query && m_account.null())
-	Debug(&module,DebugMild,"Missing database account for '%s'",name().c_str());
+	Alarm(&module,"config",DebugMild,"Missing database account for '%s'",name().c_str());
 }
 
 // little helper function to make code cleaner

@@ -3,21 +3,18 @@
  * This file is part of the YATE Project http://YATE.null.ro
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 
@@ -3892,8 +3889,7 @@ void ClientDriver::setup()
     installRelay(Progress);
     installRelay(Route,200);
     installRelay(Text);
-    installRelay(ImRoute);
-    installRelay(ImExecute);
+    installRelay(MsgExecute);
 }
 
 // if we receive a message for an incoming call, we pass the message on
@@ -3916,9 +3912,20 @@ void ClientDriver::msgTimer(Message& msg)
 // Routing handler
 bool ClientDriver::msgRoute(Message& msg)
 {
-    // don't route here our own calls
-    if (name() == msg.getValue(YSTRING("module")))
+    // don't route here our own messages
+    if (name() == msg[YSTRING("module")])
 	return false;
+    String* routeType = msg.getParam(YSTRING("route_type"));
+    if (routeType) {
+	if (*routeType == YSTRING("msg")) {
+	    if (!(Client::self() && Client::self()->imRouting(msg)))
+		return false;
+	    msg.retValue() = name() + "/*";
+	    return true;
+	}
+	if (*routeType != YSTRING("call"))
+	    return Driver::msgRoute(msg);
+    }
     if (Client::self() && Client::self()->callRouting(msg)) {
 	msg.retValue() = name() + "/*";
 	return true;
@@ -3928,16 +3935,7 @@ bool ClientDriver::msgRoute(Message& msg)
 
 bool ClientDriver::received(Message& msg, int id)
 {
-    if (id == ImRoute) {
-	// don't route here our own messages
-	if (name() == msg.getValue(YSTRING("module")))
-	    return false;
-	if (!(Client::self() && Client::self()->imRouting(msg)))
-	    return false;
-	msg.retValue() = name() + "/*";
-	return true;
-    }
-    if (id == ImExecute || id == Text) {
+    if (id == MsgExecute || id == Text) {
 	if (Client::isClientMsg(msg))
 	    return false;
 	return Client::self() && Client::self()->imExecute(msg);
@@ -5375,7 +5373,7 @@ ClientResource* ClientContact::findFileTransferResource(bool ref)
 ClientResource* ClientContact::appendResource(const String& id)
 {
     if (findResource(id))
-	return false;
+	return 0;
     ClientResource* r = new ClientResource(id);
     if (!insertResource(r))
 	TelEngine::destruct(r);

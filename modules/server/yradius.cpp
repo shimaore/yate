@@ -5,23 +5,20 @@
  * RADIUS Client functionality for YATE
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
  * Largely based on the code sent by Faizan Naqvi (Tili)
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 
@@ -1016,7 +1013,7 @@ int RadiusClient::makeRequest(int port, unsigned char request, unsigned char* re
     // we have the data ready, send it and wait for an answer
     for (int r = m_retries; r > 0; r--) {
 	if (socket()->sendTo(radpckt.data(),radpckt.length(),sockAddr) == Socket::socketError()) {
-	    Debug(&__plugin,DebugGoOn,"Packet sending error %d to %s:%d",
+	    Alarm(&__plugin,"socket",DebugGoOn,"Packet sending error %d to %s:%d",
 		socket()->error(),sockAddr.host().c_str(),sockAddr.port());
 		return UnknownErr;
 	}
@@ -1683,11 +1680,11 @@ void RadiusModule::initialize()
 
     // we only have UDP support
     if (!s_localSock.create(PF_INET,SOCK_DGRAM,IPPROTO_IP)) {
-	Debug(this,DebugGoOn,"Error creating socket. Radius functions unavailable");
+	Alarm(this,"socket",DebugGoOn,"Error creating socket. Radius functions unavailable");
 	return;
     }
     if (!s_localSock.bind(s_localAddr)) {
-	Debug(this,DebugWarn,"Error %d binding to %s:%d. Radius functions unavailable",
+	Alarm(this,"socket",DebugWarn,"Error %d binding to %s:%d. Radius functions unavailable",
 	    s_localSock.error(),s_localAddr.host().c_str(),s_localAddr.port());
 	return;
     }

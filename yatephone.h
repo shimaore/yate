@@ -5,21 +5,18 @@
  * Drivers, channels and telephony related classes
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #ifndef __YATEPHONE_H
@@ -1417,9 +1414,8 @@ protected:
 	Update     = 0x00020000,
 	Transfer   = 0x00040000,
 	Control	   = 0x00080000,
-	// Instant messenging related
-	ImRoute    = 0x00100000,
-	ImExecute  = 0x00200000,
+	// Instant messaging related
+	MsgExecute = 0x00100000,
 	// Last possible public ID
 	PubLast    = 0x0fffffff,
 	// Private messages base ID
@@ -1630,6 +1626,7 @@ private:
     bool m_outgoing;
     u_int64_t m_timeout;
     u_int64_t m_maxcall;
+    u_int64_t m_maxPDD;          // Timeout while waiting for some progress on outgoing calls
     u_int64_t m_dtmfTime;
     unsigned int m_toutAns;
     unsigned int m_dtmfSeq;
@@ -1922,6 +1919,29 @@ public:
      * @param defTout Default timeout to apply, negative to not alter
      */
     void setMaxcall(const Message* msg, int defTout = -1);
+
+    /**
+     * Get the time this channel will time out while waiting for some progress
+     *  on outgoing calls
+     * @return Timeout time or zero if no timeout
+     */
+    inline u_int64_t maxPDD() const
+	{ return m_maxPDD; }
+
+    /**
+     * Set the time this channel will time out while waiting for some progress
+     *  on outgoing calls
+     * @param tout New timeout time or zero to disable
+     */
+    inline void maxPDD(u_int64_t tout)
+	{ m_maxPDD = tout; }
+
+    /**
+     * Set the time this channel will time out while waiting for some progress
+     *  on outgoing calls
+     * @param msg Reference of message possibly holding "maxpdd" parameter
+     */
+    void setMaxPDD(const Message& msg);
 
     /**
      * Get the connected channel identifier.

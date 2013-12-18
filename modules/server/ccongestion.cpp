@@ -5,21 +5,18 @@
  * Update call accept engine status from installed engine's monitors
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2010 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include <yatephone.h>
@@ -64,7 +61,6 @@ private:
 };
 
 static CongestionModule s_module;
-static const String s_target = "engine";
 static const char* s_mutexName = "CCongestion";
 
 
@@ -85,17 +81,21 @@ public:
 bool CpuNotify::received(Message& msg)
 {
     int count = msg.getIntValue("count",0);
-    NamedList params("");
-    String param = "notify.";
-    String paramValue = "value.";
+    String monitor;
+    String newVal;
+    const String param = "notify.";
+    const String paramValue = "value.";
     for (int i = 0; i < count; i++) {
-	String notif = msg.getValue(param + String(i),"");
-        String value = msg.getValue(paramValue + String(i),"");
-	if (notif == "target" && value != s_target)
+	const String& notif = msg[param + String(i)];
+	const String& value = msg[paramValue + String(i)];
+	if (notif == YSTRING("target") && value != YSTRING("engine"))
 	    return false;
-        params.addParam(notif,value);
+	if (notif == YSTRING("monitor"))
+	    monitor = value;
+	else if (notif == YSTRING("new"))
+	    newVal = value;
     }
-    s_module.updateMonitor(params.getValue("monitor"),params.getValue("new"));
+    s_module.updateMonitor(monitor,newVal);
     s_module.updateEngine();
     return false;
 }
@@ -136,7 +136,7 @@ void CongestionModule::initialize()
 	    m->addParam("targetid","cpuload");
 	    m->addParam("component","cpuload");
 	    m->addParam("operation",ns->name());
-	    m->addParam("engine",*ns);
+	    m->addParam("cpu.engine",*ns);
 	    Engine::enqueue(m);
 	}
     }

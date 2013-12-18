@@ -3,21 +3,18 @@
  * This file is part of the YATE Project http://YATE.null.ro 
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #include <yatexml.h>
@@ -925,35 +922,6 @@ inline unsigned char getDec(String& dec)
     return 0;
 }
 
-// Obtain a hexa representation of the given hexa char
-inline signed char hexDecode(char c)
-{
-    if (('0' <= c) && (c <= '9'))
-	return c - '0';
-    if (('A' <= c) && (c <= 'F'))
-	return c - 'A' + 10;
-    if (('a' <= c) && (c <= 'f'))
-	return c - 'a' + 10;
-    return -1;
-}
-
-// Obtain a char from the given hexa number
-inline unsigned char getHex(String& hex)
-{
-    if (hex.length() > 6) {
-	DDebug(DebugNote,"Hex number '%s' too long",hex.c_str());
-	return 0;
-    }
-    signed char c1 = hexDecode(hex.at(3));
-    signed char c2 = hexDecode(hex.at(4));
-    if (c1 == -1 || c2 == -1) {
-	DDebug(DebugNote,"Invalid hex number '%s'",hex.c_str());
-	return 0;
-    }
-    unsigned char c = (c1 << 4) | c2;
-    return c;
-}
-
 // Unescape the given text
 void XmlSaxParser::unEscape(String& text)
 {
@@ -985,9 +953,19 @@ void XmlSaxParser::unEscape(String& text)
 	    String aux(str + found,len - found);
 	    char re = 0;
 	    if (aux.startsWith("&#")) {
-		if (aux.at(2) == 'x')
-		    re = getHex(aux);
-		else
+		if (aux.at(2) == 'x') {
+		    if (aux.length() > 4 && aux.length() <= 12) {
+			int esc = aux.substr(3,aux.length() - 4).toInteger(-1,16);
+			if (esc != -1) {
+			    UChar uc(esc);
+			    buf.append(str,found) << uc.c_str();
+			    str += len;
+			    len = 0;
+			    found = -1;
+			    continue;
+			}
+		    }
+		} else
 		    re = getDec(aux);
 	    }
 	    if (re == '&') {
@@ -1827,9 +1805,9 @@ void XmlElement::addInheritedNs(const NamedList& list)
 }
 
 // Obtain the first text of this xml element
-const String& XmlElement::getText()
+const String& XmlElement::getText() const
 {
-    XmlText* txt = 0;
+    const XmlText* txt = 0;
     for (ObjList* ob = getChildren().skipNull(); ob && !txt; ob = ob->skipNext())
 	txt = (static_cast<XmlChild*>(ob->get()))->xmlText();
     return txt ? txt->getText() : String::empty();
@@ -1840,6 +1818,26 @@ XmlChild* XmlElement::getFirstChild()
     if (!m_children.getChildren().skipNull())
 	return 0;
     return static_cast<XmlChild*>(m_children.getChildren().skipNull()->get());
+}
+
+XmlText* XmlElement::setText(const char* text)
+{
+    XmlText* txt = 0;
+    for (ObjList* o = getChildren().skipNull(); o; o = o->skipNext()) {
+	txt = (static_cast<XmlChild*>(o->get()))->xmlText();
+	if (txt)
+	    break;
+    }
+    if (txt) {
+	if (!text)
+	    return static_cast<XmlText*>(removeChild(txt));
+	txt->setText(text);
+    }
+    else if (text) {
+	txt = new XmlText(text);
+	addChild(txt);
+    }
+    return txt;
 }
 
 // Add a text child
@@ -1949,6 +1947,14 @@ unsigned int XmlElement::copyAttributes(NamedList& list, const String& prefix) c
 	copy++;
     }
     return copy;
+}
+
+void XmlElement::setAttributes(NamedList& list, const String& prefix, bool skipPrefix)
+{
+    if (prefix)
+	m_element.copySubParams(list,prefix,skipPrefix);
+    else
+	m_element.copyParams(list);
 }
 
 // Retrieve a namespace attribute. Search in parent or inherited for it

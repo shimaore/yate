@@ -3,21 +3,18 @@
  * This file is part of the YATE Project http://YATE.null.ro
  *
  * Yet Another Telephony Engine - a fully featured software PBX and IVR
- * Copyright (C) 2004-2006 Null Team
+ * Copyright (C) 2004-2013 Null Team
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This software is distributed under multiple licenses;
+ * see the COPYING file in the main directory for licensing
+ * information for this specific distribution.
+ *
+ * This use of this software may be subject to additional restrictions.
+ * See the LEGAL file in the main directory for details.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  */
 
 #ifdef FDSIZE_HACK
@@ -46,6 +43,7 @@
 
 #ifndef _WINDOWS
 
+#include <net/if.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -79,6 +77,38 @@ using namespace TelEngine;
 
 static Mutex s_mutex(false,"SocketAddr");
 
+static const TokenDict s_tosValues[] = {
+    // TOS
+    { "normal",      Socket::Normal },
+    { "lowdelay",    Socket::LowDelay },
+    { "throughput",  Socket::MaxThroughput },
+    { "reliability", Socket::MaxReliability },
+    { "mincost",     Socket::MinCost },
+    // DSCP
+    { "expedited",   Socket::ExpeditedFwd },
+    { "voice",       Socket::VoiceAdmit },
+    { "af11",        Socket::AF11 },
+    { "af12",        Socket::AF12 },
+    { "af13",        Socket::AF13 },
+    { "af21",        Socket::AF21 },
+    { "af22",        Socket::AF22 },
+    { "af23",        Socket::AF23 },
+    { "af31",        Socket::AF31 },
+    { "af32",        Socket::AF32 },
+    { "af33",        Socket::AF33 },
+    { "af41",        Socket::AF41 },
+    { "af42",        Socket::AF42 },
+    { "af43",        Socket::AF43 },
+    { "cs0",         Socket::CS0 },
+    { "cs1",         Socket::CS1 },
+    { "cs2",         Socket::CS2 },
+    { "cs3",         Socket::CS3 },
+    { "cs4",         Socket::CS4 },
+    { "cs5",         Socket::CS5 },
+    { "cs6",         Socket::CS6 },
+    { "cs7",         Socket::CS7 },
+    { 0, 0 }
+};
 
 #ifdef _WINDOWS
 
@@ -109,6 +139,98 @@ static void epochToFt(unsigned int secEpoch, FILETIME& ft)
 #endif
 
 
+//
+// IPv6 module functions
+//
+#ifdef AF_INET6
+
+#if defined(HAVE_GHBN2_R) || defined(HAVE_GHBN2)
+#define YATE_SOCKET_GHBN2_AVAILABLE
+
+static inline bool ghbn2Set(struct sockaddr* addr, hostent* he, int family)
+{
+    if (!(he && he->h_addrtype == family && he->h_addr_list))
+	return false;
+    char* val = he->h_addr_list[0];
+    if (!val)
+	return false;
+    if (family == AF_INET6) {
+	((struct sockaddr_in6*)addr)->sin6_addr = *(in6_addr*)val;
+	return true;
+    }
+    return false;
+}
+
+// Resolve an address using gethostbyname2_r or gethostbyname2
+// Return 1 on success, 0 on failure, -1 if not available
+static int resolveGHBN2(struct sockaddr* addr, const char* name)
+{
+    if (!addr || TelEngine::null(name))
+	return 0;
+    int family = AF_INET6;
+#ifdef HAVE_GHBN2_R
+    char buf[576];
+    struct hostent h;
+    struct hostent* hr = 0;
+    int errn = 0;
+    int r = gethostbyname2_r(name,family,&h,buf,sizeof(buf),&hr,&errn);
+    if (r != ERANGE) {
+	if (!r && ghbn2Set(addr,hr,family))
+	    return 1;
+	return 0;
+    }
+    // Buffer too short: fallback to gethostbyname2 if available
+#endif
+#ifdef HAVE_GHBN2
+    Lock lck(s_mutex,MAX_RESWAIT);
+    if (lck.locked()) {
+	if (ghbn2Set(addr,gethostbyname2(name,family),family))
+	    return 1;
+    }
+    else
+	Alarm("engine","socket",DebugWarn,"Resolver was busy, failing '%s'",name);
+#else
+#ifndef HAVE_GHBN2_R
+    return -1;
+#endif
+#endif
+    return 0;
+}
+
+#endif // defined(HAVE_GHBN2_R) || defined(HAVE_GHBN2)
+
+// Resolve a domain to IPv6 address
+static inline bool resolveIPv6(struct sockaddr* addr, const char* name)
+{
+    static bool s_noIPv6 = true;
+#ifdef YATE_SOCKET_GHBN2_AVAILABLE
+    int res = resolveGHBN2(addr,name);
+    if (res >= 0)
+	return res > 0;
+#endif
+    // TODO: implement AF_INET6 resolving
+    if (s_noIPv6) {
+	s_noIPv6 = false;
+	Alarm("engine","socket",DebugWarn,"Resolver for %s is not available",
+	    SocketAddr::lookupFamily(SocketAddr::IPv6));
+    }
+    return false;
+}
+
+#endif // AF_INET6
+
+
+const String s_ipv4NullAddr = "0.0.0.0";
+const String s_ipv6NullAddr = "::";
+
+const TokenDict SocketAddr::s_familyName[] = {
+    {"Unknown", Unknown},
+    {"IPv4",    IPv4},
+    {"IPv6",    IPv6},
+    {"Unix",    Unix},
+    {0,0},
+};
+
 SocketAddr::SocketAddr(const struct sockaddr* addr, socklen_t len)
     : m_address(0), m_length(0)
 {
@@ -130,6 +252,7 @@ void SocketAddr::clear()
 {
     m_length = 0;
     m_host.clear();
+    m_addr.clear();
     void* tmp = m_address;
     m_address = 0;
     if (tmp)
@@ -224,6 +347,34 @@ bool SocketAddr::host(const String& name)
 	return false;
     if (name == m_host)
 	return true;
+    if (!m_address) {
+	int f = family(name);
+	switch (f) {
+	    case Unix:
+#ifdef HAS_AF_UNIX
+		if (assign(AF_UNIX) && host(name))
+		    return true;
+#endif
+		break;
+	    case Unknown:
+		// fall through to set IP host
+	    case IPv6:
+#ifdef AF_INET6
+		if (assign(AF_INET6) && host(name))
+		    return true;
+#endif
+		if (f == IPv6)
+		    break;
+		// fall through to IPv4
+	    case IPv4:
+		if (assign(AF_INET) && host(name))
+		    return true;
+		break;
+	}
+	// Restore data
+	clear();
+	return false;
+    }
     switch (family()) {
 	case AF_INET:
 	    {
@@ -248,7 +399,7 @@ bool SocketAddr::host(const String& name)
 			s_mutex.unlock();
 		    }
 		    else
-			Debug(DebugGoOn,"Resolver was busy, failing '%s'",name.c_str());
+			Alarm("engine","socket",DebugWarn,"Resolver was busy, failing '%s'",name.c_str());
 		}
 		if (a != INADDR_NONE) {
 		    ((struct sockaddr_in*)m_address)->sin_addr.s_addr = a;
@@ -259,13 +410,29 @@ bool SocketAddr::host(const String& name)
 	    break;
 #ifdef AF_INET6
 	case AF_INET6:
+	    if (name.find('%') >= 0) {
+		String tmp, iface;
+		splitIface(name,tmp,&iface);
+		if (!host(tmp))
+		    return false;
+		if (iface)
+#ifndef _WINDOWS
+		    scopeId(if_nametoindex(iface));
+#else
+		    scopeId(iface.toInteger(0,0,0));
+#endif
+		return true;
+	    }
 #ifdef HAVE_PTON
 	    if (inet_pton(family(),name,&((struct sockaddr_in6*)m_address)->sin6_addr) > 0) {
 		stringify();
 		return true;
 	    }
 #endif
-	    // TODO: implement AF_INET6 resolving
+	    if (resolveIPv6(m_address,name)) {
+		stringify();
+		return true;
+	    }
 	    break;
 #endif // AF_INET6
 #ifdef HAS_AF_UNIX
@@ -280,44 +447,203 @@ bool SocketAddr::host(const String& name)
     return false;
 }
 
-void SocketAddr::stringify()
+// Retrieve the family of an address
+int SocketAddr::family(const String& addr)
 {
-    m_host.clear();
-    if (!(m_length && m_address))
-	return;
-    switch (family()) {
+    if (!addr)
+	return Unknown;
+    bool ipv6 = false;
+    for (unsigned int i = 0; i < addr.length(); i++) {
+	if (addr[i] == '/')
+	    return Unix;
+	if (addr[i] == ':')
+	    ipv6 = true;
+    }
+    if (ipv6)
+	return IPv6;
+    in_addr_t a = inet_addr(addr);
+    if (a != INADDR_NONE || addr == YSTRING("255.255.255.255"))
+	return IPv4;
+    return Unknown;
+}
+
+// Convert the host address to a String
+bool SocketAddr::stringify(String& s, struct sockaddr* addr)
+{
+    if (!addr)
+	return false;
+    switch (addr->sa_family) {
 	case AF_INET:
 #ifdef HAVE_NTOP
 	    {
 		char buf[16];
 		buf[0] = '\0';
-		m_host = inet_ntop(family(),&((struct sockaddr_in*)m_address)->sin_addr,
+		s = inet_ntop(addr->sa_family,&((struct sockaddr_in*)addr)->sin_addr,
 		    buf,sizeof(buf));
 	    }
 #else
 	    s_mutex.lock();
-	    m_host = inet_ntoa(((struct sockaddr_in*)m_address)->sin_addr);
+	    s = inet_ntoa(((struct sockaddr_in*)addr)->sin_addr);
 	    s_mutex.unlock();
 #endif
-	    break;
+	    return true;
 #ifdef AF_INET6
 	case AF_INET6:
 #ifdef HAVE_NTOP
 	    {
 		char buf[48];
 		buf[0] = '\0';
-		m_host = inet_ntop(family(),&((struct sockaddr_in6*)m_address)->sin6_addr,
+		s = inet_ntop(addr->sa_family,&((struct sockaddr_in6*)addr)->sin6_addr,
 		    buf,sizeof(buf));
 	    }
+	    return true;
 #endif
 	    break;
 #endif // AF_INET6
 #ifdef HAS_AF_UNIX
 	case AF_UNIX:
-	    m_host = ((struct sockaddr_un*)m_address)->sun_path;
-	    break;
+	    s = ((struct sockaddr_un*)addr)->sun_path;
+	    return true;
 #endif
     }
+    return false;
+}
+
+// Copy a host address to a buffer
+int SocketAddr::copyAddr(uint8_t* buf, struct sockaddr* addr)
+{
+    if (!(buf && addr))
+	return Unknown;
+    switch (addr->sa_family) {
+	case AF_INET:
+	    ::memcpy(buf,&((struct sockaddr_in*)addr)->sin_addr,4);
+	    return IPv4;
+#ifdef AF_INET6
+	case AF_INET6:
+	    ::memcpy(buf,&((struct sockaddr_in6*)addr)->sin6_addr,16);
+	    return IPv6;
+#endif
+    }
+    return Unknown;
+}
+
+// Append an address to a buffer
+String& SocketAddr::appendAddr(String& buf, const String& addr, int family)
+{
+    if (!addr)
+	return buf;
+    // Address already starts with [
+    if (addr[0] == '[') {
+	buf << addr;
+	return buf;
+    }
+    if (family == Unknown && addr.find(':') >= 0)
+	family = IPv6;
+    if (family != IPv6)
+	buf << addr;
+    else
+	buf << "[" << addr << "]";
+    return buf;
+}
+
+// Check if an address is empty or null
+bool SocketAddr::isNullAddr(const String& addr, int family)
+{
+    if (!addr)
+	return true;
+    switch (family) {
+	case IPv4:
+	    return addr == s_ipv4NullAddr;
+	case IPv6:
+	    return addr == s_ipv6NullAddr;
+    }
+    return addr == s_ipv4NullAddr || addr == s_ipv6NullAddr;
+}
+
+// Split an interface from address
+// An interface may be present in addr after a percent char (e.g. fe80::23%eth0)
+void SocketAddr::splitIface(const String& buf, String& addr, String* iface)
+{
+    if (!buf) {
+	addr.clear();
+	if (iface)
+	    iface->clear();
+	return;
+    }
+    int pos = buf.find('%');
+    if (pos < 0) {
+	if (iface)
+	    iface->clear();
+	addr = buf;
+    }
+    else {
+	if (iface)
+	    *iface = buf.substr(pos + 1);
+	addr = buf.substr(0,pos);
+    }
+}
+
+// Split an address into ip/port
+// Handle addr, addr:port, [addr], [addr]:port
+void SocketAddr::split(const String& buf, String& addr, int& port, bool portPresent)
+{
+    if (!buf) {
+	addr.clear();
+	return;
+    }
+    if (buf[0] == '[') {
+	int p = buf.find(']',1);
+	if (p >= 1) {
+	    if (p < ((int)buf.length() - 1) && buf[p + 1] == ':')
+		port = buf.substr(p + 2).toInteger();
+	    addr.assign(buf.c_str() + 1,p - 1);
+	    return;
+	}
+    }
+    int p = buf.find(':');
+    if (p >= 0) {
+	// Check for a second ':': it may be an IPv6 address
+	// or we expect a port at the end of an IPv6 address
+	int p2 = buf.rfind(':');
+	if (p == p2 || portPresent) {
+	    port = buf.substr(p2 + 1).toInteger();
+	    addr.assign(buf.c_str(),p2);
+	}
+	else 
+	    addr = buf;
+    }
+    else
+	addr = buf;
+}
+
+const String& SocketAddr::ipv4NullAddr()
+{
+    return s_ipv4NullAddr;
+}
+
+const String& SocketAddr::ipv6NullAddr()
+{
+    return s_ipv6NullAddr;
+}
+
+const TokenDict* SocketAddr::dictFamilyName()
+{
+    return s_familyName;
+}
+
+void SocketAddr::stringify()
+{
+    m_host.clear();
+    m_addr.clear();
+    if (m_length && m_address)
+	stringify(m_host,m_address);
+}
+
+// Store host:port in m_addr
+void SocketAddr::updateAddr() const
+{
+    m_addr.clear();
+    appendTo(m_addr,host(),port(),family());
 }
 
 int SocketAddr::port() const
@@ -351,6 +677,7 @@ bool SocketAddr::port(int newport)
 	default:
 	    return false;
     }
+    m_addr.clear();
     return true;
 }
 
@@ -1283,6 +1610,11 @@ SOCKET Socket::invalidHandle()
 #endif
 }
 
+const TokenDict* Socket::tosValues()
+{
+    return s_tosValues;
+}
+
 int Socket::socketError()
 {
 #ifdef _WINDOWS
@@ -1634,7 +1966,7 @@ bool Socket::select(bool* readok, bool* writeok, bool* except, struct timeval* t
     if (tmp >= (SOCKET)FD_SETSIZE) {
 	if (localFail) {
 	    localFail = false;
-	    Debug(DebugGoOn,"Socket::select: handle %d larger than compiled in maximum %d",
+	    Alarm("engine","socket",DebugGoOn,"Socket::select: handle %d larger than compiled in maximum %d",
 		tmp,FD_SETSIZE);
 	}
 	return false;
@@ -1704,11 +2036,22 @@ bool Socket::getOption(int level, int name, void* buffer, socklen_t* length)
 
 bool Socket::setTOS(int tos)
 {
+#if defined(AF_INET6) && defined(IPV6_TCLASS)
+    SocketAddr addr;
+    if (getSockName(addr) && addr.family() == AF_INET6)
+	return setOption(IPPROTO_IPV6,IPV6_TCLASS,&tos,sizeof(tos));
+#endif
 #ifdef IP_TOS
     return setOption(IPPROTO_IP,IP_TOS,&tos,sizeof(tos));
 #else
-    m_error = ENOTIMPL;
-    return false;
+    if (tos != Normal) {
+	m_error = ENOTIMPL;
+	return false;
+    }
+    else {
+	m_error = 0;
+	return true;
+    }
 #endif
 }
 
